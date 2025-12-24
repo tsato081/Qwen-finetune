@@ -12,10 +12,6 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import logging
 
-# Ensure each torchrun worker sees only its assigned GPU.
-if "LOCAL_RANK" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["LOCAL_RANK"]
-
 # Unsloth patches must happen before trl/transformers/peft imports.
 import unsloth  # noqa: F401
 
@@ -126,7 +122,19 @@ def set_device_from_local_rank() -> None:
     try:
         import torch
 
-        torch.cuda.set_device(int(local_rank))
+        requested = int(local_rank)
+        if torch.cuda.is_available():
+            visible = torch.cuda.device_count()
+            if visible == 0:
+                return
+            if requested >= visible:
+                logging.warning(
+                    "LOCAL_RANK=%s but torch sees only %s CUDA device(s); setting device to 0",
+                    requested,
+                    visible,
+                )
+                requested = 0
+            torch.cuda.set_device(requested)
     except Exception:
         return
 
@@ -135,6 +143,28 @@ def configure_runtime_env(disable_torch_compile: bool) -> None:
     if disable_torch_compile:
         os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
         os.environ.setdefault("TORCHINDUCTOR_DISABLE", "1")
+
+
+def resolve_device_map_for_training() -> object:
+    # Unsloth defaults to device_map="sequential" (shards the model across all visible GPUs).
+    # For torchrun-style training, we want 1 process = 1 GPU, so force a single-device map.
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None:
+        try:
+            lr = int(local_rank)
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    visible = torch.cuda.device_count()
+                    if visible and lr >= visible:
+                        lr = 0
+            except Exception:
+                pass
+            return {"": lr}
+        except ValueError:
+            pass
+    return {"": 0}
 
 
 def setup_file_logging(log_dir: Path) -> None:
@@ -634,6 +664,7 @@ def prepare_model(model_name: str, max_seq_length: int, load_in_4bit: bool):
         dtype=None,
         load_in_4bit=load_in_4bit,
         load_in_8bit=CONFIG.get("load_in_8bit", False),
+        device_map=resolve_device_map_for_training(),
         full_finetuning=False,
     )
     tokenizer = get_chat_template(tokenizer, chat_template="qwen3-instruct")
