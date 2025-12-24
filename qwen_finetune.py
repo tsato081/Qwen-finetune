@@ -30,6 +30,7 @@ ASSISTANT_ROLE = "assistant"
 CONFIG = {
     "model_name": "unsloth/Qwen3-30B-A3B-Instruct-2507",
     "load_in_4bit": False,
+    "load_in_8bit": True,
     "max_seq_length": 4096,
     "per_device_batch_size": 1,
     "gradient_accumulation_steps": 16,  # global batch ~64 if 4 GPUs
@@ -588,7 +589,7 @@ def prepare_model(model_name: str, max_seq_length: int, load_in_4bit: bool):
         max_seq_length=max_seq_length,
         dtype=None,
         load_in_4bit=load_in_4bit,
-        load_in_8bit=False,
+        load_in_8bit=CONFIG.get("load_in_8bit", False),
         full_finetuning=False,
     )
     tokenizer = get_chat_template(tokenizer, chat_template="qwen3-instruct")
