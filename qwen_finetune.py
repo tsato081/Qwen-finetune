@@ -43,6 +43,15 @@ CONFIG = {
     "resume_from_checkpoint": True,
     "num_proc": 8,
     "disable_torch_compile": True,
+    "optim": "paged_adamw_8bit",
+    "lora": {
+        # IMPORTANT (memory): for MoE models, applying LoRA to MLP (up/down/gate) across experts
+        # explodes trainable params & optimizer state. Start with attention-only.
+        "r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    },
     "eval_path": Path("data/train/hawks_val.json"),
     "eval_steps": 200,
     "eval_generate_max_samples": 200,
@@ -86,6 +95,7 @@ class StageConfig:
     save_steps: int
     save_total_limit: int
     resume_from_checkpoint: bool
+    optim: str
     max_seq_length: int = 4096
     bf16: bool = True
     lr_scheduler: str = "cosine"
@@ -171,6 +181,19 @@ def write_config_snapshot(path: Path, data: Dict[str, Any]) -> None:
 def load_json_dataset(path: Path) -> List[dict]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def resolve_optim_name(name: str) -> str:
+    try:
+        from transformers.training_args import OptimizerNames
+
+        allowed = {x.value for x in OptimizerNames}
+        if name in allowed:
+            return name
+        logging.warning("Unknown optimizer '%s'; falling back to 'adamw_torch'. Allowed=%s", name, sorted(allowed))
+        return "adamw_torch"
+    except Exception:
+        return name
 
 
 def build_conversation(record: dict) -> List[dict]:
@@ -615,20 +638,18 @@ def prepare_model(model_name: str, max_seq_length: int, load_in_4bit: bool):
     )
     tokenizer = get_chat_template(tokenizer, chat_template="qwen3-instruct")
 
+    lora_cfg = CONFIG.get("lora") or {}
+    lora_r = int(lora_cfg.get("r", 16))
+    lora_alpha = int(lora_cfg.get("lora_alpha", 32))
+    lora_dropout = float(lora_cfg.get("lora_dropout", 0.0))
+    target_modules = lora_cfg.get("target_modules") or ["q_proj", "k_proj", "v_proj", "o_proj"]
+
     model = FastModel.get_peft_model(
         model,
-        r=64,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
-        lora_alpha=128,
-        lora_dropout=0.0,
+        r=lora_r,
+        target_modules=target_modules,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=42,
@@ -661,7 +682,7 @@ def build_trainer(model, tokenizer, dataset: Dataset, cfg: StageConfig, eval_dat
         eval_steps=cfg.eval_steps if eval_strategy != "no" else None,
         bf16=cfg.bf16,
         lr_scheduler_type=cfg.lr_scheduler,
-        optim="adamw_torch",
+        optim=resolve_optim_name(cfg.optim),
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to=[],
@@ -738,6 +759,19 @@ def main():
     if is_main_process():
         setup_file_logging(Path("outputs/logs"))
     cfg_global = CONFIG
+    if is_main_process():
+        lora_cfg = cfg_global.get("lora") or {}
+        logging.info(
+            "run_config model=%s load_in_4bit=%s load_in_8bit=%s max_seq_length=%s num_proc=%s optim=%s lora_r=%s lora_target_modules=%s",
+            cfg_global.get("model_name"),
+            cfg_global.get("load_in_4bit"),
+            cfg_global.get("load_in_8bit"),
+            cfg_global.get("max_seq_length"),
+            cfg_global.get("num_proc"),
+            cfg_global.get("optim"),
+            lora_cfg.get("r"),
+            lora_cfg.get("target_modules"),
+        )
     stage1_raw = cfg_global["stage1"]
     stage2_raw = cfg_global["stage2"]
 
@@ -755,6 +789,7 @@ def main():
         save_steps=cfg_global["save_steps"],
         save_total_limit=cfg_global["save_total_limit"],
         resume_from_checkpoint=cfg_global["resume_from_checkpoint"],
+        optim=cfg_global["optim"],
         max_seq_length=cfg_global["max_seq_length"],
         num_proc=cfg_global["num_proc"],
         eval_steps=cfg_global["eval_steps"],
@@ -774,6 +809,7 @@ def main():
         save_steps=cfg_global["save_steps"],
         save_total_limit=cfg_global["save_total_limit"],
         resume_from_checkpoint=cfg_global["resume_from_checkpoint"],
+        optim=cfg_global["optim"],
         max_seq_length=cfg_global["max_seq_length"],
         num_proc=cfg_global["num_proc"],
         eval_steps=cfg_global["eval_steps"],
@@ -826,6 +862,9 @@ def main():
                 "save_steps": cfg_global["save_steps"],
                 "save_total_limit": cfg_global["save_total_limit"],
                 "resume_from_checkpoint": cfg_global["resume_from_checkpoint"],
+                "optim": cfg_global.get("optim"),
+                "lora_r": (cfg_global.get("lora") or {}).get("r"),
+                "lora_target_modules": ",".join((cfg_global.get("lora") or {}).get("target_modules") or []),
             }
         )
 
