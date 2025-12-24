@@ -31,9 +31,9 @@ ASSISTANT_ROLE = "assistant"
 # === Config (edit here) ===
 CONFIG = {
     "model_name": "unsloth/Qwen3-30B-A3B-Instruct-2507",
-    "load_in_4bit": False,
-    "load_in_8bit": True,
-    "max_seq_length": 2048,
+    "load_in_4bit": True,
+    "load_in_8bit": False,
+    "max_seq_length": 1536,
     "per_device_batch_size": 1,
     "gradient_accumulation_steps": 16,  # global batch ~64 if 4 GPUs
     "warmup_ratio": 0.03,
