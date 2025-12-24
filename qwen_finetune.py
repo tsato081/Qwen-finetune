@@ -98,6 +98,18 @@ def is_main_process() -> bool:
         return True
 
 
+def set_device_from_local_rank() -> None:
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is None:
+        return
+    try:
+        import torch
+
+        torch.cuda.set_device(int(local_rank))
+    except Exception:
+        return
+
+
 def distributed_barrier() -> None:
     try:
         import torch.distributed as dist
@@ -692,6 +704,7 @@ def run_stage(
 
 
 def main():
+    set_device_from_local_rank()
     cfg_global = CONFIG
     stage1_raw = cfg_global["stage1"]
     stage2_raw = cfg_global["stage2"]
