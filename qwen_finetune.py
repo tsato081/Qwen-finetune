@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+import logging
+
 # Ensure each torchrun worker sees only its assigned GPU.
 if "LOCAL_RANK" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["LOCAL_RANK"]
@@ -123,6 +125,18 @@ def configure_runtime_env(disable_torch_compile: bool) -> None:
     if disable_torch_compile:
         os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
         os.environ.setdefault("TORCHINDUCTOR_DISABLE", "1")
+
+
+def setup_file_logging(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "run.log"
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_path) for h in root_logger.handlers):
+        file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
 
 
 def distributed_barrier() -> None:
@@ -721,6 +735,8 @@ def run_stage(
 def main():
     set_device_from_local_rank()
     configure_runtime_env(CONFIG.get("disable_torch_compile", False))
+    if is_main_process():
+        setup_file_logging(Path("outputs/logs"))
     cfg_global = CONFIG
     stage1_raw = cfg_global["stage1"]
     stage2_raw = cfg_global["stage2"]
