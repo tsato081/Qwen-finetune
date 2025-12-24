@@ -7,4 +7,5 @@ requires-python = ">=3.11"
 dependencies = [
     "unsloth>=2025.12.8",
     "unsloth-zoo>=2025.12.6",
+    "mlflow>=2.9.2",
 ]

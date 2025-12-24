@@ -2,6 +2,7 @@
 torchrun --nproc_per_node=4 qwen_finetune.py
 """
 
+import gc
 import json
 import os
 import random
@@ -27,6 +28,9 @@ CONFIG = {
     "gradient_accumulation_steps": 16,  # global batch ~64 if 4 GPUs
     "warmup_ratio": 0.03,
     "logging_steps": 10,
+    "save_steps": 200,  # keep aligned with eval_steps
+    "save_total_limit": 3,
+    "resume_from_checkpoint": True,
     "num_proc": None,  # set >1 to parallelize tokenization
     "eval_path": Path("data/train/hawks_val.json"),
     "eval_steps": 200,
@@ -34,6 +38,12 @@ CONFIG = {
     "eval_generate_seed": 42,
     "eval_generate_batch_size": 1,
     "eval_generate_max_new_tokens": 1024,
+    "mlflow": {
+        "enabled": True,
+        "tracking_uri": None,
+        "experiment_name": "qwen-finetune",
+        "run_name": None,
+    },
     "stage1": {
         "data_path": Path("data/train/hawks_train.json"),
         "output_dir": Path("outputs/stage1"),
@@ -62,6 +72,9 @@ class StageConfig:
     gradient_accumulation_steps: int
     warmup_ratio: float
     logging_steps: int
+    save_steps: int
+    save_total_limit: int
+    resume_from_checkpoint: bool
     max_seq_length: int = 4096
     bf16: bool = True
     lr_scheduler: str = "cosine"
@@ -97,6 +110,21 @@ def distributed_barrier() -> None:
 
 def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
+
+
+def clear_gpu_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        return
+
+
+def write_config_snapshot(path: Path, data: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def load_json_dataset(path: Path) -> List[dict]:
@@ -463,6 +491,22 @@ def run_generation_eval(
     return compute_csv_like_metrics(pred_objs, gold_objs)
 
 
+class MLflowLoggerCallback(TrainerCallback):
+    def __init__(self, mlflow_module, stage_name: str):
+        super().__init__()
+        self.mlflow = mlflow_module
+        self.stage_name = stage_name
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return control
+        step = int(state.global_step)
+        metrics = {f"{self.stage_name}/{k}": float(v) for k, v in logs.items() if isinstance(v, (int, float))}
+        if metrics:
+            self.mlflow.log_metrics(metrics, step=step)
+        return control
+
+
 class GenerationEvalCallback(TrainerCallback):
     def __init__(
         self,
@@ -569,7 +613,9 @@ def build_trainer(model, tokenizer, dataset: Dataset, cfg: StageConfig, eval_dat
         learning_rate=cfg.learning_rate,
         warmup_ratio=cfg.warmup_ratio,
         logging_steps=cfg.logging_steps,
-        save_strategy="no",
+        save_strategy="steps",
+        save_steps=cfg.save_steps,
+        save_total_limit=cfg.save_total_limit,
         eval_strategy=eval_strategy,
         eval_steps=cfg.eval_steps if eval_strategy != "no" else None,
         bf16=cfg.bf16,
@@ -579,6 +625,9 @@ def build_trainer(model, tokenizer, dataset: Dataset, cfg: StageConfig, eval_dat
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to=[],
         packing=False,
+        load_best_model_at_end=eval_strategy != "no",
+        metric_for_best_model="eval_loss" if eval_strategy != "no" else None,
+        greater_is_better=False if eval_strategy != "no" else None,
     )
 
     trainer = SFTTrainer(
@@ -598,6 +647,18 @@ def build_trainer(model, tokenizer, dataset: Dataset, cfg: StageConfig, eval_dat
     return trainer
 
 
+def resolve_resume_checkpoint(output_dir: Path, resume_from_checkpoint: bool) -> Optional[str]:
+    if not resume_from_checkpoint:
+        return None
+    if not output_dir.exists():
+        return None
+    try:
+        from transformers.trainer_utils import get_last_checkpoint
+    except Exception:
+        return None
+    return get_last_checkpoint(str(output_dir))
+
+
 def run_stage(
     model,
     tokenizer,
@@ -605,6 +666,7 @@ def run_stage(
     eval_dataset: Dataset | None,
     eval_records: Sequence[dict] | None,
     eval_generate_cfg: dict,
+    mlflow_module=None,
 ):
     train_ds = load_formatted_dataset(cfg.data_path, tokenizer, cfg.num_proc)
     trainer = build_trainer(model, tokenizer, train_ds, cfg, eval_dataset)
@@ -620,7 +682,10 @@ def run_stage(
                 max_seq_length=cfg.max_seq_length,
             )
         )
-    trainer.train()
+    if mlflow_module is not None and is_main_process():
+        trainer.add_callback(MLflowLoggerCallback(mlflow_module, cfg.name))
+    resume_checkpoint = resolve_resume_checkpoint(cfg.output_dir, cfg.resume_from_checkpoint)
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
     if eval_dataset is not None:
         trainer.evaluate()
     return unwrap_model(trainer.model)
@@ -642,6 +707,9 @@ def main():
         gradient_accumulation_steps=cfg_global["gradient_accumulation_steps"],
         warmup_ratio=cfg_global["warmup_ratio"],
         logging_steps=cfg_global["logging_steps"],
+        save_steps=cfg_global["save_steps"],
+        save_total_limit=cfg_global["save_total_limit"],
+        resume_from_checkpoint=cfg_global["resume_from_checkpoint"],
         max_seq_length=cfg_global["max_seq_length"],
         num_proc=cfg_global["num_proc"],
         eval_steps=cfg_global["eval_steps"],
@@ -658,6 +726,9 @@ def main():
         gradient_accumulation_steps=cfg_global["gradient_accumulation_steps"],
         warmup_ratio=cfg_global["warmup_ratio"],
         logging_steps=cfg_global["logging_steps"],
+        save_steps=cfg_global["save_steps"],
+        save_total_limit=cfg_global["save_total_limit"],
+        resume_from_checkpoint=cfg_global["resume_from_checkpoint"],
         max_seq_length=cfg_global["max_seq_length"],
         num_proc=cfg_global["num_proc"],
         eval_steps=cfg_global["eval_steps"],
@@ -686,13 +757,66 @@ def main():
         "max_new_tokens": cfg_global["eval_generate_max_new_tokens"],
     }
 
-    model = run_stage(model, tokenizer, stage1_cfg, eval_dataset, eval_records, eval_generate_cfg)
-    model = run_stage(model, tokenizer, stage2_cfg, eval_dataset, eval_records, eval_generate_cfg)
+    mlflow_cfg = cfg_global.get("mlflow") or {}
+    mlflow_module = None
+    mlflow_run = None
+    if mlflow_cfg.get("enabled") and is_main_process():
+        try:
+            import mlflow as mlflow_module  # type: ignore
+        except Exception as e:
+            raise RuntimeError("MLflow is enabled but not installed. Add it to dependencies.") from e
+        tracking_uri = mlflow_cfg.get("tracking_uri")
+        if tracking_uri:
+            mlflow_module.set_tracking_uri(tracking_uri)
+        mlflow_module.set_experiment(mlflow_cfg.get("experiment_name") or "qwen-finetune")
+        mlflow_run = mlflow_module.start_run(run_name=mlflow_cfg.get("run_name"))
+        mlflow_module.log_params(
+            {
+                "model_name": cfg_global["model_name"],
+                "max_seq_length": cfg_global["max_seq_length"],
+                "per_device_batch_size": cfg_global["per_device_batch_size"],
+                "gradient_accumulation_steps": cfg_global["gradient_accumulation_steps"],
+                "warmup_ratio": cfg_global["warmup_ratio"],
+                "logging_steps": cfg_global["logging_steps"],
+                "save_steps": cfg_global["save_steps"],
+                "save_total_limit": cfg_global["save_total_limit"],
+                "resume_from_checkpoint": cfg_global["resume_from_checkpoint"],
+            }
+        )
+
+    model = run_stage(
+        model,
+        tokenizer,
+        stage1_cfg,
+        eval_dataset,
+        eval_records,
+        eval_generate_cfg,
+        mlflow_module=mlflow_module,
+    )
+    if is_main_process():
+        stage1_cfg.output_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(stage1_cfg.output_dir)
+        tokenizer.save_pretrained(stage1_cfg.output_dir)
+    clear_gpu_memory()
+    model = run_stage(
+        model,
+        tokenizer,
+        stage2_cfg,
+        eval_dataset,
+        eval_records,
+        eval_generate_cfg,
+        mlflow_module=mlflow_module,
+    )
 
     if is_main_process():
         stage2_cfg.output_dir.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(stage2_cfg.output_dir)
         tokenizer.save_pretrained(stage2_cfg.output_dir)
+        write_config_snapshot(stage2_cfg.output_dir / "finetune_config.json", cfg_global)
+        if mlflow_module is not None:
+            mlflow_module.log_artifact(str(stage2_cfg.output_dir / "finetune_config.json"))
+    if mlflow_run is not None and mlflow_module is not None:
+        mlflow_module.end_run()
 
 
 if __name__ == "__main__":
