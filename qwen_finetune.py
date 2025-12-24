@@ -39,7 +39,8 @@ CONFIG = {
     "save_steps": 200,  # keep aligned with eval_steps
     "save_total_limit": 3,
     "resume_from_checkpoint": True,
-    "num_proc": None,  # set >1 to parallelize tokenization
+    "num_proc": 16,
+    "disable_torch_compile": True,
     "eval_path": Path("data/train/hawks_val.json"),
     "eval_steps": 200,
     "eval_generate_max_samples": 200,
@@ -116,6 +117,12 @@ def set_device_from_local_rank() -> None:
         torch.cuda.set_device(int(local_rank))
     except Exception:
         return
+
+
+def configure_runtime_env(disable_torch_compile: bool) -> None:
+    if disable_torch_compile:
+        os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+        os.environ.setdefault("TORCHINDUCTOR_DISABLE", "1")
 
 
 def distributed_barrier() -> None:
@@ -713,6 +720,7 @@ def run_stage(
 
 def main():
     set_device_from_local_rank()
+    configure_runtime_env(CONFIG.get("disable_torch_compile", False))
     cfg_global = CONFIG
     stage1_raw = cfg_global["stage1"]
     stage2_raw = cfg_global["stage2"]
