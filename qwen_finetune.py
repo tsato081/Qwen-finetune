@@ -10,6 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+# Ensure each torchrun worker sees only its assigned GPU.
+if "LOCAL_RANK" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["LOCAL_RANK"]
+
+# Unsloth patches must happen before trl/transformers/peft imports.
+import unsloth  # noqa: F401
+
 from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 from transformers import TrainerCallback
