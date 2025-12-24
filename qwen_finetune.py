@@ -31,7 +31,7 @@ CONFIG = {
     "model_name": "unsloth/Qwen3-30B-A3B-Instruct-2507",
     "load_in_4bit": False,
     "load_in_8bit": True,
-    "max_seq_length": 4096,
+    "max_seq_length": 2048,
     "per_device_batch_size": 1,
     "gradient_accumulation_steps": 16,  # global batch ~64 if 4 GPUs
     "warmup_ratio": 0.03,
@@ -39,7 +39,7 @@ CONFIG = {
     "save_steps": 200,  # keep aligned with eval_steps
     "save_total_limit": 3,
     "resume_from_checkpoint": True,
-    "num_proc": 16,
+    "num_proc": 8,
     "disable_torch_compile": True,
     "eval_path": Path("data/train/hawks_val.json"),
     "eval_steps": 200,
