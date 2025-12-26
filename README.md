@@ -158,7 +158,7 @@ data/train/hawks_train_curriculum.json (174,663サンプル, ~468MB)
 
 **実行**:
 ```bash
-python scripts/prepare_curriculum_data.py
+uv run python scripts/prepare_curriculum_data.py
 
 # 出力例:
 # ✅ Hawks数: 26,221 → ×3 = 78,663
@@ -285,18 +285,16 @@ git clone https://github.com/<your-org>/Qwen-finetune.git
 cd Qwen-finetune
 ```
 
-#### 2. Pythonパッケージインストール
+#### 2. Pythonパッケージインストール（uv使用）
 ```bash
-# 仮想環境作成（オプション）
-python3 -m venv .venv
-source .venv/bin/activate
+# uv をインストール（未導入の場合）
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 依存関係インストール
-pip install --upgrade pip
-pip install -r requirements.txt
+# 依存関係インストール（仮想環境は自動作成）
+uv sync
 
 # Flash Attention 2（A100最適化）
-pip install flash-attn --no-build-isolation
+uv pip install flash-attn --no-build-isolation
 ```
 
 #### 3. データファイルの配置
@@ -351,10 +349,10 @@ chmod +x scripts/run_axolotl_train.sh
 ### オプション2: 直接実行
 ```bash
 # データ準備
-python scripts/prepare_curriculum_data.py
+uv run python scripts/prepare_curriculum_data.py
 
 # 学習実行
-accelerate launch \
+uv run accelerate launch \
     --num_processes=4 \
     --mixed_precision=bf16 \
     -m axolotl.cli.train \
@@ -368,7 +366,7 @@ accelerate launch \
 # eval_steps: 5
 
 # 1GPUでテスト
-accelerate launch --num_processes=1 \
+uv run accelerate launch --num_processes=1 \
     -m axolotl.cli.train \
     src/axolotl_configs/qwen_finetune.yml
 
@@ -446,17 +444,17 @@ tail -f outputs/axolotl_qwen_finetune/training.log
 
 ```bash
 # データ準備
-python scripts/prepare_curriculum_data.py
+uv run python scripts/prepare_curriculum_data.py
 
 # データサイズ確認
 du -sh data/train/hawks_train_curriculum.json
 # → 約468MB, 174,663サンプル
 
 # YAMLテスト（構文チェック）
-python -c "import yaml; yaml.safe_load(open('src/axolotl_configs/qwen_finetune.yml'))"
+uv run python -c "import yaml; yaml.safe_load(open('src/axolotl_configs/qwen_finetune.yml'))"
 
 # 依存関係確認
-pip check
+uv pip list
 ```
 
 ---
@@ -524,7 +522,7 @@ git push origin main
 # 1. クローン + セットアップ
 git clone https://github.com/<org>/Qwen-finetune.git
 cd Qwen-finetune
-pip install -r requirements.txt
+uv sync
 
 # 2. データアップロード（AWS S3, GCS等）
 # data/train/ に3ファイルを配置
