@@ -1,5 +1,9 @@
 """
-Run inference with the merged 4bit model on the test CSV and export predictions.
+Run inference on the test CSV and export predictions + metrics.
+
+Supports:
+- Axolotl LoRA outputs (adapter_model.safetensors + adapter_config.json)
+- Fully merged model directories
 
 Example:
     python3 finetune_inference.py
@@ -9,7 +13,7 @@ import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 CSV_FIELDS = [
@@ -26,15 +30,72 @@ CSV_FIELDS = [
 
 @dataclass
 class InferenceConfig:
-    model_dir: Path = Path("outputs/stage2_merged_4bit")
+    model_dir: Path = Path("outputs/axolotl_qwen_finetune")
+    base_model: Optional[str] = None
     test_csv: Path = Path("data/test/Hawks_正解データマスター - ver 5.0 csv出力用.csv")
     instruction_source: Path = Path("data/train/hawks_train.json")
     output_csv: Path = Path("outputs/test_predictions.csv")
     output_metrics: Path = Path("outputs/test_metrics.json")
-    max_seq_length: int = 4096
+    max_seq_length: int = 1536
     max_new_tokens: int = 1024
     batch_size: int = 1
     max_samples: Optional[int] = None
+    load_in_4bit: bool = False
+    torch_dtype: str = "bf16"
+    device_map: str = "auto"
+
+
+def is_adapter_dir(path: Path) -> bool:
+    return (path / "adapter_config.json").exists() or (path / "adapter_model.safetensors").exists()
+
+
+def resolve_base_model(adapter_dir: Path, override: Optional[str]) -> Optional[str]:
+    if override:
+        return override
+    cfg_path = adapter_dir / "adapter_config.json"
+    if not cfg_path.exists():
+        return None
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return cfg.get("base_model_name_or_path")
+
+
+def load_model_and_tokenizer(cfg: InferenceConfig) -> Tuple[Any, Any]:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    load_kwargs: Dict[str, Any] = {
+        "trust_remote_code": True,
+        "device_map": cfg.device_map,
+    }
+    if cfg.load_in_4bit:
+        load_kwargs["load_in_4bit"] = True
+    else:
+        import torch
+
+        if cfg.torch_dtype == "bf16":
+            load_kwargs["torch_dtype"] = torch.bfloat16
+        elif cfg.torch_dtype == "fp16":
+            load_kwargs["torch_dtype"] = torch.float16
+
+    if is_adapter_dir(cfg.model_dir):
+        base_model = resolve_base_model(cfg.model_dir, cfg.base_model)
+        if not base_model:
+            raise ValueError("base_model is required when loading an adapter model.")
+        base = AutoModelForCausalLM.from_pretrained(base_model, **load_kwargs)
+        try:
+            from peft import PeftModel
+        except Exception as e:
+            raise RuntimeError("peft is required to load LoRA adapters.") from e
+        model = PeftModel.from_pretrained(base, str(cfg.model_dir))
+        tokenizer_source = base_model
+    else:
+        model = AutoModelForCausalLM.from_pretrained(str(cfg.model_dir), **load_kwargs)
+        tokenizer_source = str(cfg.model_dir)
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
+    return model, tokenizer
 
 
 def load_instruction(path: Path) -> str:
@@ -169,11 +230,6 @@ def compute_csv_metrics(pred_rows: Sequence[Dict[str, str]], gold_rows: Sequence
 def main() -> None:
     cfg = InferenceConfig()
 
-    try:
-        from unsloth import FastModel
-    except NotImplementedError as e:
-        raise RuntimeError("Unsloth requires a GPU. Run this script on a CUDA machine.") from e
-
     if not cfg.model_dir.exists():
         raise FileNotFoundError(f"Model dir not found: {cfg.model_dir}")
     if not cfg.test_csv.exists():
@@ -184,11 +240,7 @@ def main() -> None:
     if cfg.max_samples:
         rows = rows[: cfg.max_samples]
 
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=str(cfg.model_dir),
-        max_seq_length=cfg.max_seq_length,
-        load_in_4bit=True,
-    )
+    model, tokenizer = load_model_and_tokenizer(cfg)
     model.eval()
 
     if tokenizer.pad_token is None:

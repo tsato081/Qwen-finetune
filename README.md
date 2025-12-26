@@ -281,7 +281,7 @@ OS: Ubuntu 20.04/22.04（推奨）
 
 #### 1. リポジトリクローン
 ```bash
-git clone https://github.com/<your-org>/Qwen-finetune.git
+git clone https://github.com/tsato081/Qwen-finetune.git
 cd Qwen-finetune
 ```
 
