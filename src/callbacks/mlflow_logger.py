@@ -49,6 +49,16 @@ class MLflowLoggerCallback(TrainerCallback):
         self.mlflow = mlflow_module
         self.stage_name = stage_name
 
+    def register(self, cfg):
+        return cfg
+
+    def get_callbacks(self):
+        return [self]
+
+    @property
+    def trainer_callbacks(self):
+        return [self]
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         """
         Log metrics to MLflow when training logs are available.

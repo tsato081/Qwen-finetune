@@ -477,6 +477,16 @@ class GenerationEvalCallback(TrainerCallback):
         self.max_new_tokens = max_new_tokens
         self.max_seq_length = max_seq_length
 
+    def register(self, cfg):
+        return cfg
+
+    def get_callbacks(self):
+        return [self]
+
+    @property
+    def trainer_callbacks(self):
+        return [self]
+
     def _load_eval_records(self) -> None:
         if self.eval_records is not None:
             return
