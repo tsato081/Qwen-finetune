@@ -487,6 +487,25 @@ class GenerationEvalCallback(TrainerCallback):
     def trainer_callbacks(self):
         return [self]
 
+    def get_trainer_callbacks(self):
+        return [self]
+
+    def get_input_args(self):
+        return []
+
+    def __getattr__(self, name):
+        if name.startswith("get_"):
+            def _default(*args, **kwargs):
+                if name.endswith("_args"):
+                    return []
+                if name.endswith("_kwargs") or name.endswith("_config") or name.endswith("_updates"):
+                    return {}
+                if name.endswith("_callbacks"):
+                    return []
+                return None
+            return _default
+        raise AttributeError(name)
+
     def _load_eval_records(self) -> None:
         if self.eval_records is not None:
             return
