@@ -84,6 +84,10 @@ class MLflowLoggerCallback(TrainerCallback):
         """No-op post-model-load hook for Axolotl plugin interface."""
         pass
 
+    def post_model_build(self, cfg, model):
+        """No-op post-model-build hook for Axolotl plugin interface."""
+        pass
+
     def __getattr__(self, name):
         if name.startswith("get_"):
             def _default(*args, **kwargs):
