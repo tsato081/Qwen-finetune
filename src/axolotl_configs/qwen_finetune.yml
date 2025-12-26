@@ -37,8 +37,7 @@ lora_fan_in_fan_out: false
 # → 両方をシャッフルして学習することで、ハルシネーション防止
 datasets:
   - path: data/train/hawks_train_curriculum.json
-    type: custom_instruction
-    format: instruction
+    type: alpaca
     field_instruction: instruction
     field_input: input
     field_output: output
