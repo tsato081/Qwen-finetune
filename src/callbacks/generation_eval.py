@@ -500,6 +500,10 @@ class GenerationEvalCallback(TrainerCallback):
     def get_input_args(self):
         return "src.callbacks.generation_eval.GenerationEvalCallbackArgs"
 
+    def load_datasets(self, cfg, preprocess=False):
+        """No-op dataset loading for Axolotl plugin interface."""
+        return None
+
     def __getattr__(self, name):
         if name.startswith("get_"):
             def _default(*args, **kwargs):
