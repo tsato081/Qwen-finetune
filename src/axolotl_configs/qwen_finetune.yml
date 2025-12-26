@@ -83,7 +83,7 @@ save_total_limit: 3
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-flash_attention: true  # FA2でネイティブ高速化
+flash_attention: false  # Temporarily disabled due to flash-attn 2.8.3 compatibility issue
 unsloth: false  # BF16マルチGPU環境での安定性のため無効化
 torch_compile: false
 
