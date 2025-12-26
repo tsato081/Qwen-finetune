@@ -88,6 +88,54 @@ class MLflowLoggerCallback(TrainerCallback):
         """No-op post-model-build hook for Axolotl plugin interface."""
         pass
 
+    def pre_lora_load(self, cfg, model):
+        """No-op pre-lora-load hook for Axolotl plugin interface."""
+        pass
+
+    def post_lora_load(self, cfg, model):
+        """No-op post-lora-load hook for Axolotl plugin interface."""
+        pass
+
+    def post_trainer_create(self, cfg, trainer):
+        """No-op post-trainer-create hook for Axolotl plugin interface."""
+        pass
+
+    def get_trainer_cls(self, cfg):
+        """Return None to use default trainer."""
+        return None
+
+    def get_training_args(self, cfg):
+        """Return None to use default training args."""
+        return None
+
+    def get_collator_cls_and_kwargs(self, cfg, is_eval=False):
+        """Return None to use default collator."""
+        return None
+
+    def create_optimizer(self, cfg, trainer):
+        """Return None to use default optimizer."""
+        return None
+
+    def create_lr_scheduler(self, cfg, trainer, optimizer, num_training_steps):
+        """Return None to use default scheduler."""
+        return None
+
+    def add_callbacks_pre_trainer(self, cfg, model):
+        """Return empty list for pre-trainer callbacks."""
+        return []
+
+    def add_callbacks_post_trainer(self, cfg, trainer):
+        """Return empty list for post-trainer callbacks."""
+        return []
+
+    def post_train(self, cfg, model):
+        """No-op post-train hook for Axolotl plugin interface."""
+        pass
+
+    def post_train_unload(self, cfg):
+        """No-op post-train-unload hook for Axolotl plugin interface."""
+        pass
+
     def __getattr__(self, name):
         if name.startswith("get_"):
             def _default(*args, **kwargs):
