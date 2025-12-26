@@ -5,8 +5,15 @@ Logs training metrics to MLflow for experiment tracking and visualization.
 """
 
 import os
+from dataclasses import dataclass
 
 from transformers import TrainerCallback
+
+
+@dataclass
+class MLflowLoggerCallbackArgs:
+    """No-op args for Axolotl plugin loading."""
+    pass
 
 
 def is_main_process() -> bool:
@@ -63,7 +70,7 @@ class MLflowLoggerCallback(TrainerCallback):
         return [self]
 
     def get_input_args(self):
-        return []
+        return "src.callbacks.mlflow_logger.MLflowLoggerCallbackArgs"
 
     def __getattr__(self, name):
         if name.startswith("get_"):

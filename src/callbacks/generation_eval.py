@@ -8,10 +8,17 @@ Metrics include JSON parsing rate, schema compliance, field matching, and F1 sco
 import json
 import os
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from transformers import TrainerCallback
+
+
+@dataclass
+class GenerationEvalCallbackArgs:
+    """No-op args for Axolotl plugin loading."""
+    pass
 
 
 # ============================================================================
@@ -491,7 +498,7 @@ class GenerationEvalCallback(TrainerCallback):
         return [self]
 
     def get_input_args(self):
-        return []
+        return "src.callbacks.generation_eval.GenerationEvalCallbackArgs"
 
     def __getattr__(self, name):
         if name.startswith("get_"):
