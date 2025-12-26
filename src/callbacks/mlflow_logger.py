@@ -4,7 +4,25 @@ MLflow Logger Callback for Axolotl training.
 Logs training metrics to MLflow for experiment tracking and visualization.
 """
 
+import os
+
 from transformers import TrainerCallback
+
+
+def is_main_process() -> bool:
+    rank = os.environ.get("RANK")
+    if rank is not None:
+        try:
+            return int(rank) == 0
+        except ValueError:
+            pass
+
+    try:
+        import torch.distributed as dist
+
+        return (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+    except Exception:
+        return True
 
 
 class MLflowLoggerCallback(TrainerCallback):
@@ -40,6 +58,8 @@ class MLflowLoggerCallback(TrainerCallback):
         Returns:
             control: Trainer control (unchanged)
         """
+        if not is_main_process():
+            return control
         if not logs:
             return control
 
