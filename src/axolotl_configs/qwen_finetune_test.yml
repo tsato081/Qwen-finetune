@@ -75,8 +75,8 @@ flash_attention: false
 unsloth: false
 torch_compile: false
 
-# DeepSpeed ZeRO-2
-deepspeed: src/deepspeed_configs/zero2.json
+# DeepSpeed disabled for single GPU test
+# (will test 4-GPU with DeepSpeed in production)
 
 # NO PLUGINS for this test (to isolate if plugins cause hang)
 plugins: []
