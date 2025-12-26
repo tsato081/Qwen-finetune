@@ -92,5 +92,5 @@ deepspeed: src/deepspeed_configs/zero2.json
 
 # カスタムコールバック（プラグインシステム）
 plugins:
-  - src.callbacks.generation_eval.GenerationEvalCallback
-  - src.callbacks.mlflow_logger.MLflowLoggerCallback
+  - src.callbacks.generation_eval.GenerationEvalPlugin
+  - src.callbacks.mlflow_logger.MLflowLoggerPlugin

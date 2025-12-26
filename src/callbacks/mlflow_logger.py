@@ -149,6 +149,42 @@ class MLflowLoggerCallback(TrainerCallback):
             return _default
         raise AttributeError(name)
 
+
+class MLflowLoggerPlugin:
+    """Axolotl plugin wrapper for MLflowLoggerCallback."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def register(self, cfg):
+        return cfg
+
+    def get_input_args(self):
+        return "src.callbacks.mlflow_logger.MLflowLoggerCallbackArgs"
+
+    def get_trainer_callbacks(self):
+        return [MLflowLoggerCallback]
+
+    def get_callbacks(self):
+        return [MLflowLoggerCallback]
+
+    @property
+    def trainer_callbacks(self):
+        return [MLflowLoggerCallback]
+
+    def __getattr__(self, name):
+        if name.startswith("get_"):
+            def _default(*args, **kwargs):
+                if name.endswith("_args"):
+                    return []
+                if name.endswith("_kwargs") or name.endswith("_config") or name.endswith("_updates"):
+                    return {}
+                if name.endswith("_callbacks"):
+                    return []
+                return None
+            return _default
+        raise AttributeError(name)
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         """
         Log metrics to MLflow when training logs are available.

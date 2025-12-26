@@ -577,6 +577,42 @@ class GenerationEvalCallback(TrainerCallback):
             return _default
         raise AttributeError(name)
 
+
+class GenerationEvalPlugin:
+    """Axolotl plugin wrapper for GenerationEvalCallback."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def register(self, cfg):
+        return cfg
+
+    def get_input_args(self):
+        return "src.callbacks.generation_eval.GenerationEvalCallbackArgs"
+
+    def get_trainer_callbacks(self):
+        return [GenerationEvalCallback]
+
+    def get_callbacks(self):
+        return [GenerationEvalCallback]
+
+    @property
+    def trainer_callbacks(self):
+        return [GenerationEvalCallback]
+
+    def __getattr__(self, name):
+        if name.startswith("get_"):
+            def _default(*args, **kwargs):
+                if name.endswith("_args"):
+                    return []
+                if name.endswith("_kwargs") or name.endswith("_config") or name.endswith("_updates"):
+                    return {}
+                if name.endswith("_callbacks"):
+                    return []
+                return None
+            return _default
+        raise AttributeError(name)
+
     def _load_eval_records(self) -> None:
         if self.eval_records is not None:
             return

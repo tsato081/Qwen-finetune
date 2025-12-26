@@ -67,13 +67,16 @@ evaluation_strategy: "no"
 output_dir: ./outputs/axolotl_qwen_finetune_test
 save_strategy: "no"
 
-# Optimization
+# Optimization (disable aggressive optimizations for debugging)
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 flash_attention: false
 unsloth: false
 torch_compile: false
+lora_qkv_kernel: false
+lora_o_kernel: false
+lora_mlp_kernel: false
 
 # DeepSpeed disabled for single GPU test
 # (will test 4-GPU with DeepSpeed in production)

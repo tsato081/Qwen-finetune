@@ -5,7 +5,12 @@ Custom callbacks for Axolotl training.
 - MLflowLoggerCallback: Logs metrics to MLflow
 """
 
-from .generation_eval import GenerationEvalCallback
-from .mlflow_logger import MLflowLoggerCallback
+from .generation_eval import GenerationEvalCallback, GenerationEvalPlugin
+from .mlflow_logger import MLflowLoggerCallback, MLflowLoggerPlugin
 
-__all__ = ["GenerationEvalCallback", "MLflowLoggerCallback"]
+__all__ = [
+    "GenerationEvalCallback",
+    "GenerationEvalPlugin",
+    "MLflowLoggerCallback",
+    "MLflowLoggerPlugin",
+]
