@@ -1,6 +1,8 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyo
+*.pyc
 build/
 dist/
 wheels/
@@ -9,7 +11,33 @@ wheels/
 # Virtual environments
 .venv
 .env
+env/
 
-data/processed/
-data/raw/
-scripts/
+# Large data files (use separate upload for cloud)
+data/train/*.json
+!data/train/.gitkeep
+data/raw
+data/processed
+
+# Training outputs (generated at runtime)
+outputs/
+*.log
+logs/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# MLflow tracking
+mlruns/
+.mlflow
+
+# Accelerate configuration (local)
+accelerate_config.yaml

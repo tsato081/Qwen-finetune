@@ -1,0 +1,97 @@
+# Axolotl Configuration for Qwen3-30B-A3B Finetuning
+# Migration from Unsloth + SFTTrainer to Axolotl
+
+# モデル設定
+base_model: unsloth/Qwen3-30B-A3B-Instruct-2507
+model_type: qwen3
+trust_remote_code: true
+
+# 精度設定（bf16フル精度、量子化なし）
+load_in_4bit: false
+load_in_8bit: false
+bf16: true
+fp16: false
+tf32: true  # A100でTensor Core最適化を有効化
+
+# LoRA設定（16bit/bf16で学習）
+# 重要: MoEモデルはExpert層（MLP）の学習が必須
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+# MoEモデル対応: Attention層 + Expert層（MLP）の全てを学習
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - up_proj      # Expert層のUp
+  - down_proj    # Expert層のDown
+  - gate_proj    # Gating層（重要）
+lora_target_linear: true  # 線形層全体を対象に
+lora_fan_in_fan_out: false
+
+# データセット（Positive + Negative Sampling）
+# Hawks: 正解あり（犯人がいるニュース）
+# Dummy: 正解なし（犯人がいないニュース、Negative Sample）
+# → 両方をシャッフルして学習することで、ハルシネーション防止
+datasets:
+  - path: data/train/hawks_train_curriculum.json
+    type: custom_instruction
+    format: instruction
+    field_instruction: instruction
+    field_input: input
+    field_output: output
+
+# チャットテンプレート
+chat_template: qwen3_instruct
+train_on_inputs: false
+
+# シーケンス長
+sequence_len: 1536
+sample_packing: false
+
+# 学習パラメータ
+num_epochs: 1.5
+max_steps: -1  # epochsで制御
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 0.0002
+lr_scheduler: cosine
+cosine_min_lr_ratio: 0.05  # 最小LR = 1e-5
+warmup_ratio: 0.03
+optimizer: adamw_torch  # 通常のAdamW（量子化版ではない）
+weight_decay: 0.0
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_epsilon: 1e-8
+max_grad_norm: 1.0
+
+# 評価設定
+datasets_eval:
+  - path: data/train/hawks_val.json
+evaluation_strategy: steps
+eval_steps: 200
+eval_batch_size: 1
+
+# チェックポイント
+output_dir: ./outputs/axolotl_qwen_finetune
+save_strategy: steps
+save_steps: 200
+save_total_limit: 3
+
+# 最適化
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+flash_attention: true  # FA2でネイティブ高速化
+unsloth: false  # BF16マルチGPU環境での安定性のため無効化
+torch_compile: false
+
+# DeepSpeed（ZeRO-2でOptimizer State シャード化）
+deepspeed: src/deepspeed_configs/zero2.json
+
+# カスタムコールバック（プラグインシステム）
+plugins:
+  - src.callbacks.generation_eval:GenerationEvalCallback
+  - src.callbacks.mlflow_logger:MLflowLoggerCallback

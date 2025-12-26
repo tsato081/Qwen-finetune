@@ -1,0 +1,28 @@
+# Axolotl Training Dependencies
+
+# Core ML Framework
+torch>=2.0.0
+transformers>=4.40.0
+datasets>=2.16.0
+peft>=0.7.0
+
+# Axolotl Framework
+axolotl-ai>=0.3.0
+
+# Acceleration
+flash-attn>=2.4.0
+accelerate>=0.27.0
+
+# Optimization & Distributed Training
+deepspeed>=0.13.0
+bitsandbytes>=0.41.0
+
+# Logging & Monitoring
+mlflow>=2.10.0
+wandb>=0.16.0
+
+# Utilities
+pyyaml>=6.0
+numpy>=1.24.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
