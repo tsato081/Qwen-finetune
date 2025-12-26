@@ -39,6 +39,11 @@ if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
 fi
 echo ""
 
+# Ensure src/ is in Python path for custom callbacks
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+echo "PYTHONPATH configured: $(pwd)"
+echo ""
+
 # Data preparation
 echo "[1/2] Preparing curriculum data..."
 if [ ! -f "data/train/hawks_train_curriculum.json" ]; then
@@ -49,6 +54,23 @@ else
 fi
 
 echo ""
+echo "[Validation] Checking required files..."
+
+# Check evaluation data (used by GenerationEvalCallback)
+if [ ! -f "data/train/hawks_val.json" ]; then
+    echo "⚠️  Warning: data/train/hawks_val.json not found"
+    echo "   GenerationEvalCallback will skip evaluation (non-fatal)"
+fi
+
+# Check DeepSpeed config (required)
+if [ ! -f "src/deepspeed_configs/zero2.json" ]; then
+    echo "❌ Error: DeepSpeed config not found"
+    exit 1
+fi
+
+echo "✅ Validation complete"
+echo ""
+
 echo "[2/2] Starting training..."
 echo "==============================================="
 
