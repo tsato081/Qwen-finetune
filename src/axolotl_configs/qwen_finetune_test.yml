@@ -1,0 +1,82 @@
+# Axolotl Configuration - MINIMAL TEST (2 steps, no plugins)
+# Purpose: Diagnose training initialization hang
+
+base_model: unsloth/Qwen3-30B-A3B-Instruct-2507
+model_type: qwen3
+trust_remote_code: true
+
+# Precision settings (same as production)
+load_in_4bit: false
+load_in_8bit: false
+bf16: true
+fp16: false
+tf32: true
+
+# LoRA settings (same as production)
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - up_proj
+  - down_proj
+  - gate_proj
+lora_target_linear: true
+lora_fan_in_fan_out: false
+
+# Dataset
+datasets:
+  - path: data/train/hawks_train_curriculum.json
+    type: alpaca
+    field_instruction: instruction
+    field_input: input
+    field_output: output
+
+# Chat template
+chat_template: qwen3
+train_on_inputs: false
+
+# Sequence length (reduced for faster first batch)
+sequence_len: 512
+sample_packing: false
+
+# MINIMAL TRAINING: Only 2 steps to test initialization
+num_epochs: 1
+max_steps: 2
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 0.0002
+lr_scheduler: cosine
+cosine_min_lr_ratio: 0.05
+warmup_ratio: 0.03
+optimizer: adamw_torch
+weight_decay: 0.0
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_epsilon: 1e-8
+max_grad_norm: 1.0
+
+# Evaluation (disabled for faster test)
+evaluation_strategy: "no"
+
+# Checkpointing
+output_dir: ./outputs/axolotl_qwen_finetune_test
+save_strategy: "no"
+
+# Optimization
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+flash_attention: false
+unsloth: false
+torch_compile: false
+
+# DeepSpeed ZeRO-2
+deepspeed: src/deepspeed_configs/zero2.json
+
+# NO PLUGINS for this test (to isolate if plugins cause hang)
+plugins: []
