@@ -32,7 +32,7 @@ class MLflowLoggerCallback(TrainerCallback):
     Metrics are logged with a stage prefix for multi-stage training.
     """
 
-    def __init__(self, mlflow_module, stage_name: str = "training"):
+    def __init__(self, mlflow_module=None, stage_name: str = "training"):
         """
         Initialize MLflow logger callback.
 
@@ -41,6 +41,11 @@ class MLflowLoggerCallback(TrainerCallback):
             stage_name: Prefix for metric names (e.g., "training", "stage1", "stage2")
         """
         super().__init__()
+        if mlflow_module is None:
+            try:
+                import mlflow as mlflow_module  # type: ignore
+            except Exception:
+                mlflow_module = None
         self.mlflow = mlflow_module
         self.stage_name = stage_name
 
@@ -61,6 +66,8 @@ class MLflowLoggerCallback(TrainerCallback):
         if not is_main_process():
             return control
         if not logs:
+            return control
+        if self.mlflow is None:
             return control
 
         step = int(state.global_step)

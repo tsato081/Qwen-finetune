@@ -441,8 +441,9 @@ class GenerationEvalCallback(TrainerCallback):
     def __init__(
         self,
         *,
-        trainer,
-        eval_records: Sequence[dict],
+        trainer=None,
+        eval_records: Sequence[dict] | None = None,
+        eval_records_path: str | None = None,
         max_samples: int = 200,
         seed: int = 42,
         batch_size: int = 1,
@@ -453,8 +454,9 @@ class GenerationEvalCallback(TrainerCallback):
         Initialize GenerationEvalCallback.
 
         Args:
-            trainer: Trainer instance
+            trainer: Trainer instance (optional; not provided when loaded as an Axolotl plugin)
             eval_records: Evaluation records with 'instruction', 'input', 'output'
+            eval_records_path: Optional JSON/JSONL path to evaluation records
             max_samples: Maximum samples to evaluate per step
             seed: Random seed for sampling
             batch_size: Batch size for generation
@@ -464,11 +466,46 @@ class GenerationEvalCallback(TrainerCallback):
         super().__init__()
         self.trainer = trainer
         self.eval_records = eval_records
+        self.eval_records_path = (
+            eval_records_path
+            or os.environ.get("GEN_EVAL_RECORDS_PATH")
+            or "data/train/hawks_val.json"
+        )
         self.max_samples = max_samples
         self.seed = seed
         self.batch_size = batch_size
         self.max_new_tokens = max_new_tokens
         self.max_seq_length = max_seq_length
+
+    def _load_eval_records(self) -> None:
+        if self.eval_records is not None:
+            return
+        if not self.eval_records_path:
+            self.eval_records = []
+            return
+        path = Path(self.eval_records_path)
+        if not path.exists():
+            self.eval_records = []
+            return
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            records = []
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            data = records
+
+        if isinstance(data, dict):
+            data = data.get("data") or data.get("records") or []
+        if not isinstance(data, list):
+            data = []
+        self.eval_records = [r for r in data if isinstance(r, dict)]
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         """
@@ -486,11 +523,24 @@ class GenerationEvalCallback(TrainerCallback):
         Returns:
             control: Trainer control (unchanged)
         """
+        self._load_eval_records()
+        if not self.eval_records:
+            return control
+
+        model = kwargs.get("model")
+        tokenizer = kwargs.get("tokenizer")
+        if model is None or tokenizer is None:
+            if self.trainer is not None:
+                model = getattr(self.trainer, "model", None)
+                tokenizer = getattr(self.trainer, "tokenizer", None)
+        if model is None or tokenizer is None:
+            return control
+
         distributed_barrier()
         if is_main_process():
             gen_metrics = run_generation_eval(
-                model=self.trainer.model,
-                tokenizer=self.trainer.tokenizer,
+                model=model,
+                tokenizer=tokenizer,
                 records=self.eval_records,
                 max_seq_length=self.max_seq_length,
                 max_samples=self.max_samples,
@@ -500,7 +550,10 @@ class GenerationEvalCallback(TrainerCallback):
             )
             if gen_metrics:
                 gen_metrics["gen_global_step"] = float(state.global_step)
-                self.trainer.log(gen_metrics)
+                if metrics is not None:
+                    metrics.update(gen_metrics)
+                if self.trainer is not None and hasattr(self.trainer, "log"):
+                    self.trainer.log(gen_metrics)
                 out_path = Path(args.output_dir) / f"gen_metrics_step{state.global_step}.json"
                 out_path.write_text(json.dumps(gen_metrics, ensure_ascii=False, indent=2))
         distributed_barrier()
