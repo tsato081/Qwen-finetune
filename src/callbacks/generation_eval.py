@@ -504,6 +504,14 @@ class GenerationEvalCallback(TrainerCallback):
         """No-op dataset loading for Axolotl plugin interface."""
         return None
 
+    def pre_model_load(self, cfg):
+        """No-op pre-model-load hook for Axolotl plugin interface."""
+        pass
+
+    def post_model_load(self, model, cfg):
+        """No-op post-model-load hook for Axolotl plugin interface."""
+        pass
+
     def __getattr__(self, name):
         if name.startswith("get_"):
             def _default(*args, **kwargs):
