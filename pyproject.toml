@@ -20,13 +20,17 @@ where = ["."]
 include = ["src*"]
 
 [tool.uv]
-# Multiple indexes: PyTorch cu130 (priority) + PyPI (fallback)
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-priority = "primary"
-
+# Indexes: PyPI default + PyTorch cu130 for torch packages
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"
+priority = "default"
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 priority = "supplemental"
+
+# Pin torch packages to PyTorch cu130 index
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
