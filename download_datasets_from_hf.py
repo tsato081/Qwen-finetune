@@ -44,8 +44,8 @@ def download_datasets():
         "hawks_eval_gold.csv"
     ]
 
-    train_dir = Path("/workspace/data/train")  # Cloud path (adjust if needed)
-    eval_dir = Path("/workspace/data/test")
+    train_dir = Path("./data/train")
+    eval_dir = Path("./data/test")
 
     train_dir.mkdir(parents=True, exist_ok=True)
     eval_dir.mkdir(parents=True, exist_ok=True)
