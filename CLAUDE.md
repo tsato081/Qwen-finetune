@@ -126,3 +126,6 @@
 
 ## axolotlのconfigを書く際
 最新版の公式referenceはdocs/axolotl_config_reference.ymlに記載されているので参考にすること。
+
+## rule
+- axolotlの公式ドキュメント（docs.axolotl.ai/docs/）を必ず参照すること。もし参照できない場合は素直にできないということ。不正確な情報が一番迷惑です。

@@ -1,20 +1,27 @@
 base_model: Rakuten/RakutenAI-7B-instruct
-# optionally might have model_type or tokenizer_type
 model_type: MistralForCausalLM
 tokenizer_type: LlamaTokenizer
-
-# Automatically upload checkpoint and final model to HF
-# hub_model_id: username/custom_model_name
 
 load_in_8bit: true
 load_in_4bit: false
 
+# Phase 2: hawks (positive examples) + person_dummy replay (20% for FP mitigation)
 datasets:
   - path: data/train/hawks_train.json
     type: alpaca
+    field_instruction: instruction
+    field_input: input
+    field_output: output
+  - path: data/train/person_dummy_2025-12-23-1817.json
+    type: alpaca
+    field_instruction: instruction
+    field_input: input
+    field_output: output
+    weight: 0.2
+
 dataset_prepared_path: last_run_prepared
 val_set_size: 0.1
-output_dir: ./outputs/lora-out
+output_dir: ./outputs/lora-out-phase2
 
 adapter: lora
 lora_model_dir:
@@ -26,7 +33,7 @@ pad_to_sequence_len: true
 
 lora_r: 32
 lora_alpha: 16
-lora_dropout: 0.05
+lora_dropout: 0
 lora_target_linear: true
 lora_target_modules:
   - gate_proj
@@ -37,7 +44,7 @@ lora_target_modules:
   - k_proj
   - o_proj
 
-# lora optim, see docs/small_model_architecture.md.
+# lora kernel optimizations enabled (dropout must be 0)
 lora_mlp_kernel: true
 lora_qkv_kernel: true
 lora_o_kernel: true
@@ -55,26 +62,25 @@ micro_batch_size: 8
 num_epochs: 1
 optimizer: adamw_bnb_8bit
 lr_scheduler: cosine
-learning_rate: 0.0002
+learning_rate: 0.0001
 
 bf16: auto
 tf32: false
 
 gradient_checkpointing: true
-resume_from_checkpoint:
+# Resume from Phase 1 checkpoint
+resume_from_checkpoint: ./outputs/lora-out-phase1/checkpoint-final
 logging_steps: 1
 flash_attention: true
 
 loss_watchdog_threshold: 5.0
 loss_watchdog_patience: 3
 
-warmup_ratio: 0.1
+warmup_ratio: 0.05
 evals_per_epoch: 4
 saves_per_epoch: 1
 weight_decay: 0.0
 special_tokens:
-
-# save_first_step: true  # uncomment this to validate checkpoint saving works with your config
 
 # multi-gpu configs
 deepspeed: deepspeed_configs/zero2.json
