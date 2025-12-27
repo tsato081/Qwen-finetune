@@ -82,19 +82,14 @@ def download_datasets():
             print(f"  Downloading {file_name}...", end="", flush=True)
 
             try:
-                downloaded_path = hf_hub_download(
+                hf_hub_download(
                     repo_id=repo_id,
                     filename=file_name,
                     repo_type=repo_type,
                     token=HF_TOKEN,
-                    cache_dir=str(target_dir.parent / ".cache"),
-                    force_download=False,
-                    resume_download=True
+                    local_dir=str(target_dir),
+                    local_files_only=False
                 )
-
-                # Move from cache to target location
-                import shutil
-                shutil.move(downloaded_path, str(output_path))
 
                 file_size = output_path.stat().st_size
                 print(f" ✓ ({file_size / (1024*1024):.2f} MB)")
