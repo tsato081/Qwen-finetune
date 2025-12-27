@@ -1,4 +1,4 @@
-base_model: mistralai/Mistral-7B-v0.1
+base_model: Rakuten/RakutenAI-7B-instruct
 # optionally might have model_type or tokenizer_type
 model_type: MistralForCausalLM
 tokenizer_type: LlamaTokenizer
