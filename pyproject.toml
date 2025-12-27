@@ -20,5 +20,13 @@ where = ["."]
 include = ["src*"]
 
 [tool.uv]
-# PyTorch cu130 (CUDA 13.0) for cloud deployment
-index-url = "https://download.pytorch.org/whl/cu130"
+# Multiple indexes: PyTorch cu130 (priority) + PyPI (fallback)
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+priority = "primary"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+priority = "supplemental"
