@@ -78,80 +78,223 @@
 
 ## セットアップ
 
-### 1. リポジトリのクローン
+> **対象環境**: Ubuntu 22.04.5 LTS（クラウド環境 A100 80GB）
+>
+> 詳細は `docs/env_snapshot_20251226_085433.txt` を参照
+
+### ステップ1: リポジトリをクローン
 
 ```bash
 git clone <repo-url>
 cd Qwen-finetune
 ```
 
-### 2. 依存パッケージのインストール
+### ステップ2: uvをインストール
 
 ```bash
-# uv推奨（速い）
-uv sync
+# 公式インストーラ（推奨）
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# または pip の場合
-pip install -r requirements.txt
-
-# Axolotlのインストール
-pip install axolotl
-
-# MLflow（訓練監視用）
-pip install mlflow
+# または pip でインストール
+pip install uv
 ```
 
-### 3. HF トークン設定
-
-`.env` ファイルを作成：
+### ステップ3: 依存パッケージをインストール
 
 ```bash
+# uv で全依存パッケージをインストール
+uv sync
+
+# flash-attention のプリコンパイル済みホイール（CUDA 13.0対応）をインストール
+# この手順により、flash-attn をビルドせず高速に導入可能
+uv pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
+```
+
+このコマンドが以下を自動実行します:
+- `pyproject.toml` から依存パッケージを読込
+- CUDA 13.0用の PyTorch ホイール（cu130）を取得
+- Axolotl、HuggingFace、MLflow などをインストール
+- **flash-attn 2.8.3** をビルドせずインストール（PyTorch 2.9 + Python 3.11 + CUDA 13.0 対応）
+
+### ステップ4: HF トークンを設定
+
+```bash
+# オプション A: .env ファイルに記載
 cat > .env << 'EOF'
 HF_AUTH_TOKEN=hf_your_token_here
 EOF
-```
 
-または環境変数で設定：
-
-```bash
+# オプション B: 環境変数として設定
 export HF_AUTH_TOKEN="hf_..."
 ```
 
+### ステップ5: tmux をインストール
+
+訓練中に接続が切れてもプロセスが継続するよう、tmux をインストール：
+
+```bash
+sudo apt-get update && sudo apt-get install -y tmux
+```
+
+### ステップ6: セットアップの確認
+
+```bash
+# Python バージョン確認
+python --version          # Python 3.11.x であること
+
+# CUDA 確認
+nvidia-smi                # CUDA 13.0, NVIDIA Driver 580 以降 が表示されること
+
+# PyTorch インストール確認
+python -c "import torch; print(f'PyTorch {torch.__version__}')"
+
+# Axolotl 確認
+python -c "import axolotl; print('✓ Axolotl ready')"
+
+# HF トークン確認
+echo $HF_AUTH_TOKEN       # "hf_" で始まる トークンが表示されること
+
+# tmux 確認
+tmux -V                   # tmux [version] が表示されること
+```
+
+全て ✓ なら準備完了！
+
 ---
 
-## クイックスタート
+## 訓練実行
 
-### クラウド環境（推奨）
-
-```bash
-# 1. データセットをダウンロード
-uv run download_datasets_from_hf.py
-
-# 2. Phase 1訓練（約30-60分、A100 80GB）
-axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
-
-# 3. Phase 2訓練（約1-2時間、A100 80GB）
-axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
-```
-
-### ローカル環境
-
-データセットが既に `data/train/` と `data/test/` にある場合：
+### ステップ1: データセットをダウンロード
 
 ```bash
-# Phase 1
-axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
-
-# Phase 2
-axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
-```
-
-データセットが必要な場合：
-
-```bash
-# ローカルでダウンロード
 uv run download_datasets_from_hf.py
 ```
+
+`data/train/` と `data/test/` にデータセットが配置されます。
+
+### ステップ2: tmux セッションを起動
+
+訓練は時間がかかるため、tmux セッション内で実行して接続が切れても継続するようにします：
+
+```bash
+# tmux セッション "training" を作成して起動
+tmux new-session -s training -d
+```
+
+### ステップ3: 訓練パイプライン実行
+
+tmux セッション内で訓練を開始：
+
+```bash
+# tmux セッションに コマンドを送信
+tmux send-keys -t training "cd /path/to/Qwen-finetune && bash train_all.sh" Enter
+```
+
+このコマンドが以下を**全自動**で順番に実行します：
+
+1. **Phase 1 訓練**（約30-60分）
+   - 負例（非犯罪記事）データで事前学習
+   - チェックポイント: `./outputs/lora-out-phase1/checkpoint-final/`
+
+2. **Phase 2 訓練**（約1-2時間）
+   - Phase 1 チェックポイントから再開
+   - 正例（犯罪記事）で学習 + 負例を 20% の比率でリプレイ
+   - チェックポイント: `./outputs/lora-out-phase2/checkpoint-final/`
+
+3. **モデルマージ**
+   - LoRA アダプター + ベースモデル → スタンドアロン版を生成
+   - 出力: `./outputs/lora-out-phase2/merged/`（~14-15GB）
+
+4. **Model Card 生成**
+   - README.md に使用方法を記載
+
+5. **HF Hub アップロード**
+   - マージ版を自動的に Hugging Face Hub へアップロード
+   - URL: `https://huggingface.co/teru00801/rakuten-7b-instruct-person`
+
+**全体の所要時間**: 約2-3時間（A100 80GB）
+
+---
+
+### ログの確認
+
+#### リアルタイムモニタリング（訓練中）
+
+別ターミナルで以下を実行して、各フェーズのログをリアルタイム確認：
+
+```bash
+# 方法 1: 最新のログを監視（推奨）
+tail -f logs/*/phase1.log   # Phase 1
+tail -f logs/*/phase2.log   # Phase 2
+tail -f logs/*/upload.log   # アップロード
+
+# 方法 2: tmux セッションの出力を表示
+tmux capture-pane -t training -p -S -100
+```
+
+#### 訓練完了後
+
+全ログ一覧：
+
+```bash
+ls -lh logs/YYYYMMDD_HHMMSS/
+# phase1.log, phase2.log, upload.log を確認
+```
+
+#### tmux セッションの管理
+
+```bash
+# セッション一覧確認
+tmux list-sessions
+
+# セッションアタッチ（訓練状況をリアルタイム確認）
+tmux attach-session -t training
+
+# セッションから デタッチ（Ctrl+B → D）
+# Ctrl+B キー → D キー
+
+# セッション終了
+tmux kill-session -t training
+```
+
+#### MLflow でメトリクス可視化（訓練中）
+
+##### 1. ローカル環境の場合
+
+別ターミナルで：
+
+```bash
+mlflow ui --backend-store-uri ./mlruns
+# ブラウザで http://localhost:5000 を開く
+```
+
+##### 2. クラウド環境の場合（SSH ポート転送）
+
+**ステップ 1**: ローカル端末から、SSH ポート転送して接続：
+
+```bash
+# クラウドサーバーの IP アドレスまたはホスト名に置き換える
+ssh -L 5000:localhost:5000 ubuntu@<cloud-ip-or-hostname>
+
+# 例：
+ssh -L 5000:localhost:5000 ubuntu@203.0.113.42
+```
+
+> **確認方法**: クラウドプロバイダーの管理画面でインスタンスの IP アドレスを確認するか、接続情報を確認してください
+
+**ステップ 2**: クラウド側で MLflow UI を起動：
+
+```bash
+mlflow ui --backend-store-uri ./mlruns
+```
+
+**ステップ 3**: ローカルブラウザで以下にアクセス：
+
+```
+http://localhost:5000
+```
+
+損失、学習率、勾配ノルムなどをダッシュボードで確認可能
 
 ---
 
@@ -208,424 +351,6 @@ LVP0372,,,,,,
 - 総件数: 1,064 (pick="Pick" のレコード)
 - 犯罪記事: 186 件（17%）
 - 非犯罪記事: 878 件（83%）
-
----
-
-## 訓練パイプライン
-
-### Phase 1: 負例キャリブレーション
-
-非犯罪記事のみで事前学習。モデルが過度に犯罪者を検出しないようにキャリブレーション。
-
-```bash
-axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
-```
-
-**設定** (`rakuten_7b_phase1.yml`):
-
-```yaml
-base_model: Rakuten/RakutenAI-7B-instruct
-datasets:
-  - path: data/train/person_dummy_segments.jsonl
-    type: input_output
-    train_on_inputs: false
-
-test_datasets:
-  - path: data/train/hawks_val_segments.jsonl
-    type: input_output
-
-sequence_len: 4096
-sample_packing: true
-pad_to_sequence_len: true
-
-lora_r: 32
-lora_alpha: 16
-lora_dropout: 0
-lora_target_linear: true
-lora_target_modules:
-  - gate_proj
-  - down_proj
-  - up_proj
-  - q_proj
-  - v_proj
-  - k_proj
-  - o_proj
-
-micro_batch_size: 8
-gradient_accumulation_steps: 2
-max_steps: 1000
-num_epochs: 1
-optimizer: adamw_bnb_8bit
-lr_scheduler: cosine
-learning_rate: 0.0002
-
-bf16: auto
-gradient_checkpointing: true
-flash_attention: true
-
-output_dir: ./outputs/lora-out-phase1
-```
-
-**出力**: `./outputs/lora-out-phase1/checkpoint-final/`
-
-### Phase 2: 正例学習 + リプレイ
-
-実際の犯罪記事で訓練しながら、負例を20%の比率でリプレイしてFalse Positive を抑制。
-
-```bash
-axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
-```
-
-**設定** (`rakuten_7b_phase2.yml`):
-
-```yaml
-base_model: Rakuten/RakutenAI-7B-instruct
-datasets:
-  - path: data/train/hawks_train_segments.jsonl
-    type: input_output
-    train_on_inputs: false
-  - path: data/train/person_dummy_segments.jsonl
-    type: input_output
-    train_on_inputs: false
-    weight: 0.2  # 20%リプレイ
-
-test_datasets:
-  - path: data/train/hawks_val_segments.jsonl
-    type: input_output
-
-resume_from_checkpoint: ./outputs/lora-out-phase1/checkpoint-final
-max_steps: 5000
-learning_rate: 0.0001
-
-# その他は Phase 1と同じ
-output_dir: ./outputs/lora-out-phase2
-```
-
-**出力**: `./outputs/lora-out-phase2/checkpoint-final/` ← **最終モデル**
-
----
-
-## 訓練モニタリング
-
-### MLflow で可視化
-
-```bash
-mlflow ui --host 127.0.0.1 --port 5000
-```
-
-http://localhost:5000 でダッシュボードを確認可能。
-
-記録される情報：
-- Loss (train/val)
-- Learning rate
-- Gradient norm
-- Generation metrics (Phase 1 & 2)
-
-### ログ出力
-
-訓練中のコンソール出力例：
-
-```
-Step [  100 / 1000] - Loss: 0.8234 | LR: 1.8e-4 | Time: 42.3s
-Step [  200 / 1000] - Loss: 0.7156 | LR: 1.6e-4 | Time: 41.8s
-...
-Step [ 1000 / 1000] - Loss: 0.4432 | LR: 1.0e-5 | Time: 40.2s
-
-✓ Phase 1 Training Complete
-  Checkpoint saved to: ./outputs/lora-out-phase1/checkpoint-final/
-```
-
----
-
-## 推論（将来用）
-
-Phase 2 checkpoint を使用した推論例：
-
-```python
-import torch
-import json
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-
-# モデルロード
-base_model_name = "Rakuten/RakutenAI-7B-instruct"
-lora_path = "./outputs/lora-out-phase2/checkpoint-final"
-
-base_model = AutoModelForCausalLM.from_pretrained(
-    base_model_name,
-    load_in_8bit=True,
-    device_map="auto"
-)
-
-model = PeftModel.from_pretrained(base_model, lora_path)
-tokenizer = AutoTokenizer.from_pretrained(base_model_name)
-
-# プロンプト構築
-SYSTEM_RULES = "あなたはニュース記事から犯罪者情報を抽出するアシスタント。出力はJSONのみ。推測禁止。犯罪者が明確でなければ[]。"
-
-DETAILED_RULES = """ニュース報道から犯罪者の情報を構造化抽出し、以下のJSON形式で出力してください。
-
-【基本ルール】
-1. 「逮捕」「容疑者」「被告」など、明確な犯罪者のみ抽出対象
-...（詳細ルール）"""
-
-article = "東京のIT企業ABC社の山田太郎社長（45）が、詐欺容疑で逮捕された。"
-
-prompt = f"{SYSTEM_RULES}\n\n{DETAILED_RULES}\n\n【記事】\n{article}"
-
-# 推論
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-with torch.no_grad():
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=512,
-        temperature=0.1,  # 確定的出力
-        top_p=0.95
-    )
-
-response = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
-
-try:
-    result = json.loads(response)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
-except json.JSONDecodeError:
-    print("Failed to parse JSON:", response)
-```
-
----
-
-## 評価（将来用）
-
-### 評価ロジック
-
-**8つの評価項目** (各項目独立採点):
-
-| 項目 | 説明 |
-|------|------|
-| person_name | 人物のフルネーム |
-| person_age_at_published | 逮捕時の年齢 |
-| person_address | 住所（都道府県/市/区まで） |
-| person_belongs_company | 所属会社 |
-| person_position_name | 職位（社長、役員など） |
-| person_violated_law | 違反法（詐欺、強盗など） |
-| occured_locations | 犯行地点（複数可） |
-| police_departments | 警察署名（複数可） |
-
-### 採点ルール
-
-- ✓ **正解**: 内容が完全一致（順番不問）
-- ✗ **不正解**: 誤抽出、抽出漏れ、中途半端な抽出
-- ∅ **空白正解**: 正解データ＆予測ともに空白（分母除外）
-
-### 正解率計算
-
-```
-正解率 = 正解数 / (正解数 + 不正解数)
-※空白正解は分母に含まない
-```
-
-### 複数値の処理
-
-**区切り文字が異なる**:
-- `person_name`, `person_address`, `person_belongs_company` → `/` で区切り
-- `police_departments` → `,` で区切り
-
-評価時に、これらを正しく分割して比較する。
-
-**例**:
-```
-正解: "小林義治/古本辰則"
-予測: "小林義治,古本辰則"
-→ 不正解（区切り文字が異なる）
-```
-
----
-
-## モデルマージ & HF Hub アップロード
-
-### 概要
-
-Phase 2 訓練完了後、LoRA アダプターをベースモデルとマージして最終版モデルを作成し、Hugging Face Hub に自動アップロードします。
-
-**2段階フロー**:
-
-1. **訓練実行** → LoRA アダプターを `./outputs/lora-out-phase2/checkpoint-final/` に保存 + マージ版を `./outputs/lora-out-phase2/merged/` に生成
-2. **アップロード実行** → マージ版 + 自動生成 Model Card を HF Hub にアップロード
-
-### 訓練時のマージ設定
-
-Phase 2 config (`src/axolotl_configs/rakuten_7b_phase2.yml`) に以下が自動的に設定されています：
-
-```yaml
-# ============================================================
-# Model Merging & HF Hub Upload
-# ============================================================
-merge_lora: true
-hf_use_auth_token: true
-
-# Optional: Upload LoRA adapters during training
-# Uncomment to enable automatic adapter uploads
-# hub_model_id: teru00801/rakuten-7b-instruct-person-lora
-# hub_strategy: end  # "checkpoint" for every save, "end" for final only
-```
-
-- `merge_lora: true` → 訓練完了後にマージ版を自動生成
-- `hf_use_auth_token: true` → HF Hub 認証有効化
-
-### マージ版とアダプター版の違い
-
-| 特性 | マージ版 | アダプター版 |
-|------|--------|-----------|
-| **サイズ** | 14-15GB（スタンドアロン） | 数MB（LoRA重みのみ） |
-| **必要なもの** | マージ版だけで推論可能 | ベースモデル + アダプターで推論 |
-| **用途** | 本番運用推奨 | 開発・比較用 |
-| **アップロード方法** | `upload_merged_model.py` | Axolotl自動 (`hub_strategy` 設定) |
-
-### 完全自動化: `upload_merged_model.py`
-
-**実行方法**:
-
-```bash
-# 訓練実行
-axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
-
-# 完了後、自動でマージ＆Model Card生成＆アップロード
-python3 upload_merged_model.py
-```
-
-**または、一括実行:**
-
-```bash
-axolotl train src/axolotl_configs/rakuten_7b_phase2.yml && python3 upload_merged_model.py
-```
-
-**スクリプトの処理**:
-
-1. **Step 1: Model Card 生成**
-   - `./outputs/lora-out-phase2/merged/README.md` を自動生成
-   - 使用方法、出力フォーマット、モデル詳細を記載
-
-2. **Step 2: HF Hub アップロード**
-   - マージ版全体をアップロード（config.json, model weights, tokenizer など）
-   - Model Card も一緒にアップロード
-
-3. **成功時の出力**:
-```
-================================================================================
-✓ SUCCESS
-================================================================================
-Model URL: https://huggingface.co/teru00801/rakuten-7b-instruct-person
-Model Card: https://huggingface.co/teru00801/rakuten-7b-instruct-person/blob/main/README.md
-
-You can now use it with:
-  from_pretrained('teru00801/rakuten-7b-instruct-person')
-================================================================================
-```
-
-### マージ版の手動確認
-
-```bash
-# マージ版の内容確認
-ls -lh ./outputs/lora-out-phase2/merged/
-
-# 期待される出力:
-# config.json               (< 1KB)
-# generation_config.json    (< 1KB)
-# pytorch_model.bin         (14GB) または model-*.safetensors
-# README.md                 (自動生成)
-# special_tokens_map.json   (< 1KB)
-# tokenizer_config.json     (< 1KB)
-# tokenizer.json            (2-5MB)
-# tokenizer.model           (100KB-500KB)
-```
-
-### HF Hub での確認
-
-アップロード完了後：
-
-```bash
-# Web UI で確認
-https://huggingface.co/teru00801/rakuten-7b-instruct-person
-
-# ファイル一覧（Files タブ）
-# ├── config.json
-# ├── pytorch_model.bin
-# ├── README.md (Model Card)
-# ├── tokenizer.json
-# └── ...
-
-# Model Card は自動的に表示される
-```
-
-### マージ版モデルの使用例
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-# HF Hub から直接ロード（ベースモデル不要）
-model = AutoModelForCausalLM.from_pretrained(
-    "teru00801/rakuten-7b-instruct-person",
-    trust_remote_code=True,
-    device_map="auto",
-    torch_dtype="auto"
-)
-tokenizer = AutoTokenizer.from_pretrained(
-    "teru00801/rakuten-7b-instruct-person",
-    trust_remote_code=True
-)
-
-# 推論
-messages = [
-    {"role": "system", "content": "あなたはニュース記事から犯罪者情報を抽出するアシスタント..."},
-    {"role": "user", "content": "Content:記事本文..."}
-]
-prompt = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True
-)
-
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-with torch.no_grad():
-    outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
-
-response = tokenizer.decode(outputs[0], skip_special_tokens=False)
-print(response)
-```
-
-### トラブルシューティング
-
-**マージ版が生成されない**:
-```bash
-# 1. merge_lora が true に設定されているか確認
-grep "merge_lora" src/axolotl_configs/rakuten_7b_phase2.yml
-
-# 2. 訓練が正常に完了しているか確認
-ls -lh ./outputs/lora-out-phase2/checkpoint-final/
-```
-
-**アップロード失敗時**:
-```bash
-# 1. HF トークン確認
-echo $HF_AUTH_TOKEN
-cat .env | grep HF_AUTH_TOKEN
-
-# 2. 再ログイン
-huggingface-cli login
-
-# 3. 手動アップロード試行
-huggingface-cli upload teru00801/rakuten-7b-instruct-person ./outputs/lora-out-phase2/merged
-```
-
-**ディスク容量不足**:
-```bash
-# マージ版は約14-15GB必要
-df -h ./outputs/
-
-# 不要なチェックポイントを削除
-rm -rf ./outputs/lora-out-phase2/checkpoint-*/
-# checkpoint-final は保持推奨
-```
 
 ---
 
@@ -730,3 +455,30 @@ pip install deepspeed
 - **前期**:
   - Qwen3-30B ベース実装
   - 複数形式のデータセット試験
+
+---
+
+## Appendix: 将来用機能
+
+### 推論（将来実装）
+
+マージ版モデルを使用した推論は、標準的な HuggingFace API で対応可能：
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("teru00801/rakuten-7b-instruct-person")
+tokenizer = AutoTokenizer.from_pretrained("teru00801/rakuten-7b-instruct-person")
+```
+
+詳細なプロンプト例や実装については、CLAUDE.md の「タスク概要」を参照。
+
+### 評価（将来実装）
+
+8つの評価項目 (`person_name`, `person_age_at_published`, `person_address`, `person_belongs_company`, `person_position_name`, `person_violated_law`, `occured_locations`, `police_departments`) に対して、正解データとの一致度を採点。詳細は CLAUDE.md の「CSV正解データ（Hawks_...csv）評価への最小マッピング」を参照。
+
+### Phase 1/Phase 2 設定詳細
+
+- `src/axolotl_configs/rakuten_7b_phase1.yml` - Phase 1（負例キャリブレーション）の完全設定
+- `src/axolotl_configs/rakuten_7b_phase2.yml` - Phase 2（正例学習）の完全設定
+- 詳細は git 管理されるファイルを直接確認

@@ -5,10 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qwen-finetune"
 version = "0.1.0"
-description = "Add your description here"
+description = "Rakuten-7B LoRA finetuning with flash-attention"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "torch==2.9.1",
+    "torchvision==0.18.1 ; sys_platform == 'linux'",  # cu130 variant (Linux only)
+    "torchaudio==2.9.1 ; sys_platform == 'linux'",    # cu130 variant (Linux only)
     "axolotl>=0.4.0",
     "huggingface-hub>=0.36.0",
     "mlflow>=2.9.2",
@@ -17,3 +20,8 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.uv]
+# PyTorch cu130 (CUDA 13.0) for Linux/cloud deployment
+index-url = "https://download.pytorch.org/whl/cu130"
+# Note: ローカル Mac は CPU版を使用（index-url無視）、クラウド Linux は cu130 variant を取得
