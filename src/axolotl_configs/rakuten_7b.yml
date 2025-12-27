@@ -2,25 +2,27 @@ base_model: mistralai/Mistral-7B-v0.1
 # optionally might have model_type or tokenizer_type
 model_type: MistralForCausalLM
 tokenizer_type: LlamaTokenizer
+
 # Automatically upload checkpoint and final model to HF
 # hub_model_id: username/custom_model_name
 
-load_in_8bit: false
-load_in_4bit: true
+load_in_8bit: true
+load_in_4bit: false
 
 datasets:
-  - path: mhenrichsen/alpaca_2k_test
+  - path: data/train/hawks_train.json
     type: alpaca
 dataset_prepared_path: last_run_prepared
 val_set_size: 0.1
 output_dir: ./outputs/qlora-out
 
-adapter: qlora
+adapter: lora
 lora_model_dir:
 
-sequence_len: 8192
+sequence_len: 2048
 sample_packing: true
-
+eval_sample_packing: false
+pad_to_sequence_len: true
 
 lora_r: 32
 lora_alpha: 16
@@ -35,11 +37,19 @@ lora_target_modules:
   - k_proj
   - o_proj
 
-wandb_project:
-wandb_entity:
-wandb_watch:
-wandb_name:
-wandb_log_model:
+# lora optim, see docs/small_model_architecture.md.
+lora_mlp_kernel: true
+lora_qkv_kernel: true
+lora_o_kernel: true
+
+use_wandb: false
+
+use_mlflow: true
+# この辺何書いたらいいかわかんない
+mlflow_tracking_uri: str | None
+mlflow_experiment_name: str | None
+mlflow_run_name: str | None
+hf_mlflow_log_artifacts: bool | None
 
 gradient_accumulation_steps: 4
 micro_batch_size: 2
@@ -66,3 +76,6 @@ weight_decay: 0.0
 special_tokens:
 
 # save_first_step: true  # uncomment this to validate checkpoint saving works with your config
+
+# multi-gpu configs
+deepspeed: deepspeed_configs/zero2.json
