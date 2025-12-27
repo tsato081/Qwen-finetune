@@ -101,20 +101,29 @@ pip install uv
 
 ### ステップ3: 依存パッケージをインストール
 
-```bash
-# uv で全依存パッケージをインストール
-uv sync
+**ステップ 3-1: 基本パッケージをインストール**
 
-# flash-attention のプリコンパイル済みホイール（CUDA 13.0対応）をインストール
-# この手順により、flash-attn をビルドせず高速に導入可能
-uv pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
+```bash
+# uv で依存パッケージをインストール（PyTorch, Axolotl など）
+uv sync
 ```
 
 このコマンドが以下を自動実行します:
 - `pyproject.toml` から依存パッケージを読込
 - CUDA 13.0用の PyTorch ホイール（cu130）を取得
 - Axolotl、HuggingFace、MLflow などをインストール
-- **flash-attn 2.8.3** をビルドせずインストール（PyTorch 2.9 + Python 3.11 + CUDA 13.0 対応）
+
+**ステップ 3-2: Flash-Attention をインストール（別途）**
+
+PyTorch インストール完了後、flash-attn をビルド分離なしでインストール：
+
+```bash
+# flash-attention のプリコンパイル済みホイール（CUDA 13.0対応）をインストール
+# PyTorch をロード状態でインストール（ビルド分離を避ける）
+uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
+```
+
+> **注**: flash-attn はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
 
 ### ステップ4: HF トークンを設定
 
