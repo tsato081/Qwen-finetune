@@ -1,565 +1,544 @@
-# Qwen Finetune
+# 日本語犯罪情報抽出 - LoRA ファインチューニング
 
-日本語ニュース記事から「人物」と「住所」を構造化抽出するためのLoRA ファインチューニング実装。
+日本語のニュース・事件記事から犯罪者情報（名前、年齢、住所、所属、役職、違反法、犯行地、警察署）を構造化抽出するための LoRA ファインチューニング実装です。
 
-Axolotlフレームワークを使用した、YAML駆動型の学習パイプライン。
+**ベースモデル**: Rakuten/RakutenAI-7B-instruct (Mistral-7B ベース)
+**フレームワーク**: Axolotl + DeepSpeed (ZeRO-2)
+**トレーニング戦略**: 2フェーズ課程学習（負例キャリブレーション → 正例学習）
 
-## プロジェクト概要
+---
 
-本プロジェクトは、Qwen3-30B-A3Bモデルを以下の学習手法で最適化します：
+## 概要
 
-- **フレームワーク**: Axolotl（YAML設定駆動）
-- **精度**: bf16フル精度（A100ネイティブ最適化）
-- **LoRA**: r=16, MoE対応（Expert層を含む）
-- **学習戦略**: Negative Sampling（Positive + Negative混合学習）
-- **並列化**: DeepSpeed ZeRO-2（メモリ効率化）
-- **評価**: 生成メトリクス（F1スコア等）+ MLflowロギング
+### タスク定義
+
+本プロジェクトは、2つの抽出タスクの統合です：
+
+1. **人物抽出・分類** (`structure_extract_person_prompt.py` で定義)
+   - 記事内の全人物を列挙
+   - 実在性（is_real）、加害者性（is_offender）、属性を判定
+   - 出力: `persons[]` 配列
+
+2. **住所抽出** (`structure_extract_address_prompt.py` で定義)
+   - 企業本社、人物居住地、犯行地点の住所を抽出
+   - 出力: `occured_locations[]`, `residences[]`, `headquarters_locations[]`
+
+3. **警察署名抽出** (別タスク)
+   - 記事から警察署名を抽出
+   - 出力: `police_departments[]`
+
+### 訓練戦略
+
+**2フェーズ課程学習**:
+
+| フェーズ | データセット | 目的 | ステップ |
+|---------|-------------|------|--------|
+| **Phase 1** | person_dummy (100k) | 負例キャリブレーション | 1,000 |
+| **Phase 2** | hawks (26k) + dummy (20% replay) | 正例学習 + FP抑制 | 5,000 |
 
 ---
 
 ## ディレクトリ構成
 
 ```
-Qwen-finetune/
-├── src/
-│   ├── axolotl_configs/           # Axolotl設定ファイル
-│   │   └── qwen_finetune.yml      # メイン学習設定
-│   ├── deepspeed_configs/         # DeepSpeed最適化設定
-│   │   └── zero2.json             # ZeRO-2メモリ最適化
-│   └── callbacks/
-│       ├── __init__.py            # モジュール初期化
-│       ├── generation_eval.py     # 生成評価コールバック
-│       └── mlflow_logger.py       # MLflowロギング
-├── scripts/
-│   ├── prepare_curriculum_data.py # データマージ（Positive + Negative）
-│   └── run_axolotl_train.sh       # 学習ラッパースクリプト
+.
 ├── data/
-│   └── train/
-│       ├── hawks_train.json       # 正解ラベル（26,221サンプル）
-│       ├── hawks_val.json         # 評価用データ（27,798サンプル）
-│       ├── person_dummy_2025-12-23-1817.json  # ネガティブサンプル
-│       └── hawks_train_curriculum.json        # マージ済みデータ（自動生成）
-├── outputs/                       # 学習出力（.gitignore）
-│   └── axolotl_qwen_finetune/
-│       ├── checkpoint-*           # 学習チェックポイント
-│       ├── gen_metrics_step*.json # 生成評価メトリクス
-│       └── adapter_model.safetensors  # LoRAアダプタ（最終モデル）
-├── requirements.txt               # Python依存パッケージ
-├── qwen_finetune.py              # 既存実装（参照用）
-└── README.md                      # このファイル
-```
-
-### src/ ディレクトリの詳細
-
-#### `src/axolotl_configs/qwen_finetune.yml`
-Axolotlの統一設定ファイル。以下を定義します：
-
-- **モデル設定**: `unsloth/Qwen3-30B-A3B-Instruct-2507`
-- **精度**: `bf16: true`（A100ネイティブ、高速かつ高精度）
-- **LoRA設定**:
-  - r=16, alpha=32
-  - **重要**: MoE対応ターゲット
-    - Attention層: `q_proj, k_proj, v_proj, o_proj`
-    - Expert層: `up_proj, down_proj, gate_proj` ← **必須**
-- **学習パラメータ**:
-  - 学習率: 2e-4（cosine: 2e-4 → 1e-5）
-  - バッチサイズ: 1 × 16積算 = 実効16
-  - Epoch: 1.5（～174,663サンプル）
-  - 評価/保存: 200ステップごと
-- **データセット**: `data/train/hawks_train_curriculum.json`
-  - Hawks（正解あり）×3 + Dummy（正解なし）×96,000
-  - 比率: ~1:1.2（Negative Sampling効果最大）
-- **評価用**: `data/train/hawks_val.json`
-- **最適化**:
-  - Flash Attention 2（FA2）でネイティブ高速化
-  - Gradient Checkpointingでメモリ効率化
-  - DeepSpeed ZeRO-2でOptimizer Stateシャード化
-- **コールバック**:
-  - `GenerationEvalCallback`: JSON生成メトリクス計算
-  - `MLflowLoggerCallback`: メトリクスロギング
-
-#### `src/deepspeed_configs/zero2.json`
-メモリ効率化設定。以下を提供します：
-
-- **ZeRO-2最適化**:
-  - Optimizer States をGPU間でシャード化（120GB → 30GB/GPU）
-  - Gradients もシャード化
-  - CPU Offload対応（より安全な運用）
-- **Optimizerパラメータ**: AdamW（lr=2e-4）
-
-**メモリ見積もり** (A100 80GB):
-```
-GPU単体当たり:
-  - モデル重み (bf16):       ~15GB
-  - LoRA:                    ~1GB
-  - Optimizer States (ZeRO-2): ~30GB
-  - Gradients (ZeRO-2):      ~15GB
-  - Activations:             ~15-20GB
-  ─────────────────────────
-  合計:                       ~70-75GB（80GB以内）
-```
-
-#### `src/callbacks/generation_eval.py`
-生成タスク評価コールバック（~930行）。以下を実装：
-
-**メトリクス計算**:
-- `gen_json_parse_rate`: JSON解析成功率
-- `gen_schema_ok_rate`: スキーマ準拠率
-- `gen_offender_presence_f1`: 加害者有無のF1スコア
-- `gen_offender_name_set_f1`: 人名セットF1スコア
-- `gen_all_fields_exact_match_rate`: 全フィールド一致率
-- `gen_field_exact_match_rate/*`: フィールド別一致率
-- `gen_fp_rate_on_negative`: ネガティブサンプル誤検出率
-
-**実行**: 評価フェーズ（`eval_steps: 200`）で自動実行
-
-#### `src/callbacks/mlflow_logger.py`
-MLflow実験トラッキング。以下を記録：
-
-- 学習メトリクス（loss, learning_rate等）
-- 生成評価メトリクス（F1スコア等）
-- ステップごとのメトリック推移
-
-**MLflow UI**:
-```bash
-mlflow ui --host 0.0.0.0 --port 5000
-# http://localhost:5000 でダッシュボード確認
+│   ├── train/                          # 訓練データ
+│   │   ├── hawks_val_segments.jsonl        # 評価用（4,633件）
+│   │   ├── hawks_train_segments.jsonl      # Phase 2訓練（26,221件）
+│   │   └── person_dummy_segments.jsonl     # Phase 1訓練＋Phase 2 replay（100,000件）
+│   └── test/                           # 評価データ
+│       ├── hawks_eval_input.jsonl          # 推論入力（1,064件）
+│       └── hawks_eval_gold.csv             # 正解ラベル（1,064件）
+│
+├── src/
+│   └── axolotl_configs/
+│       ├── rakuten_7b_phase1.yml           # Phase 1設定
+│       └── rakuten_7b_phase2.yml           # Phase 2設定
+│
+├── deepspeed_configs/
+│   └── zero2.json                      # DeepSpeed ZeRO-2設定
+│
+├── download_datasets_from_hf.py        # HFからデータセットをダウンロード
+├── upload_to_hf.py                     # ローカルデータセットをHFにアップロード
+├── regenerate_jsonl_segments.py        # 訓練データをsegments形式で再生成
+│
+├── outputs/                            # 訓練出力（.gitignoreに含む）
+│   ├── lora-out-phase1/                   # Phase 1チェックポイント
+│   │   └── checkpoint-final/
+│   └── lora-out-phase2/                   # Phase 2チェックポイント（最終）
+│       └── checkpoint-final/
+│
+├── mlruns/                             # MLflow追跡（.gitignoreに含む）
+│
+└── README.md                           # このファイル
 ```
 
 ---
 
-### scripts/ ディレクトリの詳細
+## セットアップ
 
-#### `scripts/prepare_curriculum_data.py`
-Positive（Hawks）とNegative（Dummy）サンプルをマージするデータ準備スクリプト。
+### 1. リポジトリのクローン
 
-**目的**:
-- Hawks（正解ラベルあり、犯人がいるニュース）×3回繰り返し
-- Dummy（正解なし、犯人がいないニュース）の先頭96,000件
-- → バランスの取れた学習データを生成
-
-**入力ファイル**:
-```
-data/train/
-  ├── hawks_train.json (26,221サンプル)
-  └── person_dummy_2025-12-23-1817.json (100,000サンプル)
-```
-
-**処理フロー**:
-1. `hawks_train.json` を3回繰り返す → 78,663サンプル
-2. `person_dummy_2025-12-23-1817.json` から先頭96,000件取得
-3. 順序を保ったまま結合
-4. `hawks_train_curriculum.json` に保存（174,663サンプル）
-
-**出力ファイル**:
-```
-data/train/hawks_train_curriculum.json (174,663サンプル, ~468MB)
-```
-
-**実行**:
 ```bash
-uv run python scripts/prepare_curriculum_data.py
-
-# 出力例:
-# ✅ Hawks数: 26,221 → ×3 = 78,663
-# ✅ Dummy数: 96,000
-# ✅ 合計: 174,663 (比率: 1:1.2)
-# ✅ 保存: data/train/hawks_train_curriculum.json
-```
-
-**重要な設計選択**:
-- **順序固定しない**: マージ後、Axolotlがランダムシャッフルする
-- **比率バランス**: Hawks ×3 : Dummy = 1:1.2 で Negative Sampling効果最大
-- **既存ファイル不使用**: `hawks_train_plus_person_dummy_2025-12-23-1817.json` (126,221サンプル) は不均衡（1:3.8）のため使用しない
-
-**トラブルシューティング**:
-- エラー: `FileNotFoundError: hawks_train.json`
-  → `data/train/` に入力ファイルを配置してから実行
-- 出力サイズ確認:
-  ```bash
-  du -sh data/train/hawks_train_curriculum.json
-  # → 約468MB が期待値
-  ```
-
-#### `scripts/run_axolotl_train.sh`
-Axolotl学習パイプラインのラッパースクリプト。
-
-**目的**:
-- データ準備の自動実行
-- Axolotlトレーニング起動の簡素化
-- GPU数動的指定に対応
-
-**使用法**:
-```bash
-# 基本（4GPU、デフォルト設定）
-chmod +x scripts/run_axolotl_train.sh
-./scripts/run_axolotl_train.sh
-
-# 設定ファイル指定
-./scripts/run_axolotl_train.sh src/axolotl_configs/qwen_finetune.yml
-
-# GPU数指定（例: 8GPU）
-./scripts/run_axolotl_train.sh src/axolotl_configs/qwen_finetune.yml 8
-```
-
-**処理フロー**:
-```
-1. 入力チェック
-   - CONFIG_FILE が存在するか
-   - デフォルト: src/axolotl_configs/qwen_finetune.yml
-   - デフォルト NUM_GPUS: 4
-
-2. データ準備
-   - hawks_train_curriculum.json が存在するか
-   - 未生成なら prepare_curriculum_data.py を実行
-
-3. 学習実行
-   - accelerate launch コマンド実行
-   - --num_processes: NUM_GPUS
-   - --mixed_precision: bf16
-   - -m axolotl.cli.train: Axolotl CLIで実行
-
-4. 終了
-   - 学習完了を表示
-```
-
-**出力ディレクトリ**:
-```
-outputs/axolotl_qwen_finetune/
-  ├── checkpoint-200/               # ステップ200チェックポイント
-  ├── checkpoint-400/               # ステップ400チェックポイント
-  ├── checkpoint-600/               # ... (最新3つ保持)
-  ├── adapter_model.safetensors     # LoRAアダプタ（最終モデル）
-  ├── adapter_config.json           # LoRA設定メタデータ
-  ├── gen_metrics_step200.json      # ステップ200生成メトリクス
-  ├── gen_metrics_step400.json      # ステップ400生成メトリクス
-  ├── training_args.bin             # 学習引数
-  ├── optimizer.pt                  # 最後のOptimizer状態
-  └── trainer_state.json            # 学習状態（再開に必要）
-```
-
-**トラブルシューティング**:
-- 実行権限エラー: `./scripts/run_axolotl_train.sh: Permission denied`
-  ```bash
-  chmod +x scripts/run_axolotl_train.sh
-  ```
-- CONFIG_FILE エラー: `Error: Config file not found`
-  ```bash
-  # パスを完全に指定
-  ./scripts/run_axolotl_train.sh /absolute/path/to/qwen_finetune.yml
-  ```
-- GPU認識エラー: `RuntimeError: Expected all tensors to be on the same device`
-  ```bash
-  nvidia-smi  # GPU × 4が表示されるか確認
-  accelerate env  # num_processes=4 が表示されるか確認
-  ```
-
-**ログ確認**:
-```bash
-# 標準出力をリアルタイム確認
-./scripts/run_axolotl_train.sh 2>&1 | tee training.log
-
-# または学習中にログを監視
-tail -f outputs/axolotl_qwen_finetune/training.log
-```
-
----
-
-## セットアップ手順
-
-### 環境要件
-
-```yaml
-GPU: NVIDIA A100 80GB × 4
-CUDA: 12.1以上
-Python: 3.10以上
-OS: Ubuntu 20.04/22.04（推奨）
-ストレージ: 500GB以上（モデル + データ + チェックポイント）
-```
-
-### クラウド環境での初期セットアップ
-
-#### 1. リポジトリクローン
-```bash
-git clone https://github.com/tsato081/Qwen-finetune.git
+git clone <repo-url>
 cd Qwen-finetune
 ```
 
-#### 2. Pythonパッケージインストール（uv使用）
-```bash
-# uv をインストール（未導入の場合）
-curl -LsSf https://astral.sh/uv/install.sh | sh
+### 2. 依存パッケージのインストール
 
-# 依存関係インストール（仮想環境は自動作成）
+```bash
+# uv推奨（速い）
 uv sync
 
-# Flash Attention 2（A100最適化）
-uv pip install flash-attn --no-build-isolation
+# または pip の場合
+pip install -r requirements.txt
+
+# Axolotlのインストール
+pip install axolotl
+
+# MLflow（訓練監視用）
+pip install mlflow
 ```
 
-#### 3. データファイルの配置
-```bash
-# クラウド環境にアップロード（以下3ファイル、合計468MB）
-# - data/train/hawks_train.json (26,221サンプル)
-# - data/train/hawks_val.json (27,798サンプル)
-# - data/train/person_dummy_2025-12-23-1817.json (100,000サンプル)
+### 3. HF トークン設定
 
-# 確認
-ls -lh data/train/*.json
+`.env` ファイルを作成：
+
+```bash
+cat > .env << 'EOF'
+HF_AUTH_TOKEN=hf_your_token_here
+EOF
 ```
 
-#### 4. Accelerate設定（初回のみ）
+または環境変数で設定：
+
 ```bash
-accelerate config
-
-# 以下を選択:
-# - Compute environment: This machine
-# - Distributed type: MULTI_GPU
-# - Number of processes: 4
-# - Mixed precision: bf16
-# - Use DeepSpeed: No（YAML設定で指定）
-```
-
-#### 5. GPUと設定の確認
-```bash
-# GPU確認
-nvidia-smi
-# → A100 × 4が表示される
-
-# Accelerate設定確認
-accelerate env
-# → num_processes=4, mixed_precision=bf16
+export HF_AUTH_TOKEN="hf_..."
 ```
 
 ---
 
-## 学習実行
+## クイックスタート
 
-### オプション1: ラッパースクリプト（推奨）
+### クラウド環境（推奨）
+
 ```bash
-chmod +x scripts/run_axolotl_train.sh
-./scripts/run_axolotl_train.sh
+# 1. データセットをダウンロード
+uv run download_datasets_from_hf.py
+
+# 2. Phase 1訓練（約30-60分、A100 80GB）
+axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
+
+# 3. Phase 2訓練（約1-2時間、A100 80GB）
+axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
 ```
 
-**処理フロー**:
-1. `scripts/prepare_curriculum_data.py` でデータ自動マージ
-2. Axolotlで学習開始（4GPU、bf16、DeepSpeed ZeRO-2）
-3. 200ステップごとに評価 + メトリクス保存
+### ローカル環境
 
-### オプション2: 直接実行
+データセットが既に `data/train/` と `data/test/` にある場合：
+
 ```bash
-# データ準備
-uv run python scripts/prepare_curriculum_data.py
+# Phase 1
+axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
 
-# 学習実行
-uv run accelerate launch \
-    --num_processes=4 \
-    --mixed_precision=bf16 \
-    -m axolotl.cli.train \
-    src/axolotl_configs/qwen_finetune.yml
+# Phase 2
+axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
 ```
 
-### オプション3: 小規模テスト（デバッグ用）
+データセットが必要な場合：
+
 ```bash
-# YAML設定を一時的に変更
-# max_steps: 10
-# eval_steps: 5
-
-# 1GPUでテスト
-uv run accelerate launch --num_processes=1 \
-    -m axolotl.cli.train \
-    src/axolotl_configs/qwen_finetune.yml
-
-# YAML設定を本番に戻す
-# num_epochs: 1.5
-# max_steps: -1
+# ローカルでダウンロード
+uv run download_datasets_from_hf.py
 ```
 
 ---
 
-## 学習結果の確認
+## データセット
 
-### チェックポイント
-```bash
-ls -la outputs/axolotl_qwen_finetune/
-# → checkpoint-200/
-# → checkpoint-400/
-# → ... (save_total_limit: 3 で最新3つのみ保持)
+### 訓練データ形式（segments JSONL）
+
+4つのセグメントで構成：
+
+```json
+{
+  "segments": [
+    {
+      "label": false,
+      "text": "あなたはニュース記事から犯罪者情報を抽出するアシスタント。出力はJSONのみ。推測禁止。犯罪者が明確でなければ[]。"
+    },
+    {
+      "label": false,
+      "text": "ニュース報道から犯罪者の情報を構造化抽出し、以下のJSON形式で出力してください。\n【基本ルール】\n1. 「逮捕」「容疑者」「被告」など、明確な犯罪者のみ抽出対象..."
+    },
+    {
+      "label": false,
+      "text": "【記事】\n記事本文（メタデータ削除済み）"
+    },
+    {
+      "label": true,
+      "text": "{\"persons\": [{\"name\": \"...\", \"is_real\": true, \"is_offender\": true, \"age\": \"...\", \"position\": \"...\", \"affiliation\": \"...\", \"address\": \"...\", \"category\": \"法令違反\", \"act\": \"詐欺\"}], \"occured_locations\": [...], \"police_departments\": [...]}"
+    }
+  ]
+}
 ```
 
-### 生成評価メトリクス
-```bash
-ls outputs/axolotl_qwen_finetune/gen_metrics_step*.json
+**セグメント制御**:
+- `label: false` → 前方パスのみ、loss計算から除外（tokens → -100）
+- `label: true` → loss計算に含含（訓練対象）
 
-# 例: 最新メトリクス確認
-cat outputs/axolotl_qwen_finetune/gen_metrics_step$(ls -t outputs/axolotl_qwen_finetune/gen_metrics_step*.json | head -1 | grep -oP 'step\K\d+').json | python -m json.tool
+**結果**: モデルは JSON 出力部分のみで学習
+
+### 評価データ
+
+**入力** (`hawks_eval_input.jsonl`):
+```json
+{"id": "LVP0359", "body": "記事本文..."}
 ```
 
-### MLflow実験トラッキング
-```bash
-# MLflow UIを起動
-mlflow ui --host 0.0.0.0 --port 5000
-
-# ブラウザで http://<IP>:5000 にアクセス
-# → 学習グラフ、メトリクス推移、ハイパーパラメータを確認
+**正解ラベル** (`hawks_eval_gold.csv`):
+```csv
+quality_test_id,person_name,person_age_at_published,person_address,person_belongs_company,person_position_name,person_violated_law,occured_locations,police_departments
+LVP0359,,,,,,
+LVP0372,,,,,,
 ```
 
-### 学習ログ
+**統計**:
+- 総件数: 1,064 (pick="Pick" のレコード)
+- 犯罪記事: 186 件（17%）
+- 非犯罪記事: 878 件（83%）
+
+---
+
+## 訓練パイプライン
+
+### Phase 1: 負例キャリブレーション
+
+非犯罪記事のみで事前学習。モデルが過度に犯罪者を検出しないようにキャリブレーション。
+
 ```bash
-# Axolotlのログを確認
-tail -f outputs/axolotl_qwen_finetune/training.log
-# または標準出力を監視
+axolotl train src/axolotl_configs/rakuten_7b_phase1.yml
+```
+
+**設定** (`rakuten_7b_phase1.yml`):
+
+```yaml
+base_model: Rakuten/RakutenAI-7B-instruct
+datasets:
+  - path: data/train/person_dummy_segments.jsonl
+    type: input_output
+    train_on_inputs: false
+
+test_datasets:
+  - path: data/train/hawks_val_segments.jsonl
+    type: input_output
+
+sequence_len: 4096
+sample_packing: true
+pad_to_sequence_len: true
+
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0
+lora_target_linear: true
+lora_target_modules:
+  - gate_proj
+  - down_proj
+  - up_proj
+  - q_proj
+  - v_proj
+  - k_proj
+  - o_proj
+
+micro_batch_size: 8
+gradient_accumulation_steps: 2
+max_steps: 1000
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: cosine
+learning_rate: 0.0002
+
+bf16: auto
+gradient_checkpointing: true
+flash_attention: true
+
+output_dir: ./outputs/lora-out-phase1
+```
+
+**出力**: `./outputs/lora-out-phase1/checkpoint-final/`
+
+### Phase 2: 正例学習 + リプレイ
+
+実際の犯罪記事で訓練しながら、負例を20%の比率でリプレイしてFalse Positive を抑制。
+
+```bash
+axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
+```
+
+**設定** (`rakuten_7b_phase2.yml`):
+
+```yaml
+base_model: Rakuten/RakutenAI-7B-instruct
+datasets:
+  - path: data/train/hawks_train_segments.jsonl
+    type: input_output
+    train_on_inputs: false
+  - path: data/train/person_dummy_segments.jsonl
+    type: input_output
+    train_on_inputs: false
+    weight: 0.2  # 20%リプレイ
+
+test_datasets:
+  - path: data/train/hawks_val_segments.jsonl
+    type: input_output
+
+resume_from_checkpoint: ./outputs/lora-out-phase1/checkpoint-final
+max_steps: 5000
+learning_rate: 0.0001
+
+# その他は Phase 1と同じ
+output_dir: ./outputs/lora-out-phase2
+```
+
+**出力**: `./outputs/lora-out-phase2/checkpoint-final/` ← **最終モデル**
+
+---
+
+## 訓練モニタリング
+
+### MLflow で可視化
+
+```bash
+mlflow ui --host 127.0.0.1 --port 5000
+```
+
+http://localhost:5000 でダッシュボードを確認可能。
+
+記録される情報：
+- Loss (train/val)
+- Learning rate
+- Gradient norm
+- Generation metrics (Phase 1 & 2)
+
+### ログ出力
+
+訓練中のコンソール出力例：
+
+```
+Step [  100 / 1000] - Loss: 0.8234 | LR: 1.8e-4 | Time: 42.3s
+Step [  200 / 1000] - Loss: 0.7156 | LR: 1.6e-4 | Time: 41.8s
+...
+Step [ 1000 / 1000] - Loss: 0.4432 | LR: 1.0e-5 | Time: 40.2s
+
+✓ Phase 1 Training Complete
+  Checkpoint saved to: ./outputs/lora-out-phase1/checkpoint-final/
 ```
 
 ---
 
-## パフォーマンス最適化ポイント
+## 推論（将来用）
 
-### なぜbf16か？（4bitではなく）
-- **A100ネイティブ**: Tensor Coreが bf16 をネイティブサポート（超高速）
-- **高精度**: 4bit量子化による精度劣化なし
-- **数値安定性**: 勾配計算が安定（4bitより）
-- **メモリ効率**: DeepSpeed ZeRO-2で対応（30GB/GPU）
+Phase 2 checkpoint を使用した推論例：
 
-### なぜMoE対応LoRAか？
-- **Expert層学習**: `up_proj, down_proj, gate_proj` を含める
-- **Attention層のみ不可**: MoE性能が死ぬ（Qwen3の強みは Expert多様性）
-- **YAML記述**: `lora_target_modules` で明示的に指定
+```python
+import torch
+import json
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 
-### なぜNegative Samplingか？
-- **ハルシネーション防止**: 「抽出すべき」と「無視すべき」を混在学習
-- **比率バランス**: Hawks ×3 (78K) : Dummy (96K) ≈ 1:1 で最大効果
-- **ランダムシャッフル**: Axolotlのデフォルト動作に任せる（順序固定しない）
+# モデルロード
+base_model_name = "Rakuten/RakutenAI-7B-instruct"
+lora_path = "./outputs/lora-out-phase2/checkpoint-final"
 
-### なぜDeepSpeed ZeRO-2か？
-- **メモリ削減**: Optimizer States 120GB → 30GB/GPU（4分の1）
-- **OOM防止**: スパイク時のメモリエラーを完全防止
-- **安定性**: CPU Offload対応で更に安全
+base_model = AutoModelForCausalLM.from_pretrained(
+    base_model_name,
+    load_in_8bit=True,
+    device_map="auto"
+)
+
+model = PeftModel.from_pretrained(base_model, lora_path)
+tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+
+# プロンプト構築
+SYSTEM_RULES = "あなたはニュース記事から犯罪者情報を抽出するアシスタント。出力はJSONのみ。推測禁止。犯罪者が明確でなければ[]。"
+
+DETAILED_RULES = """ニュース報道から犯罪者の情報を構造化抽出し、以下のJSON形式で出力してください。
+
+【基本ルール】
+1. 「逮捕」「容疑者」「被告」など、明確な犯罪者のみ抽出対象
+...（詳細ルール）"""
+
+article = "東京のIT企業ABC社の山田太郎社長（45）が、詐欺容疑で逮捕された。"
+
+prompt = f"{SYSTEM_RULES}\n\n{DETAILED_RULES}\n\n【記事】\n{article}"
+
+# 推論
+inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+with torch.no_grad():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=512,
+        temperature=0.1,  # 確定的出力
+        top_p=0.95
+    )
+
+response = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+
+try:
+    result = json.loads(response)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+except json.JSONDecodeError:
+    print("Failed to parse JSON:", response)
+```
 
 ---
 
-## ローカル環境での検証（オプション）
+## 評価（将来用）
 
-データセットの検証と小規模デバッグ用：
+### 評価ロジック
 
-```bash
-# データ準備
-uv run python scripts/prepare_curriculum_data.py
+**8つの評価項目** (各項目独立採点):
 
-# データサイズ確認
-du -sh data/train/hawks_train_curriculum.json
-# → 約468MB, 174,663サンプル
+| 項目 | 説明 |
+|------|------|
+| person_name | 人物のフルネーム |
+| person_age_at_published | 逮捕時の年齢 |
+| person_address | 住所（都道府県/市/区まで） |
+| person_belongs_company | 所属会社 |
+| person_position_name | 職位（社長、役員など） |
+| person_violated_law | 違反法（詐欺、強盗など） |
+| occured_locations | 犯行地点（複数可） |
+| police_departments | 警察署名（複数可） |
 
-# YAMLテスト（構文チェック）
-uv run python -c "import yaml; yaml.safe_load(open('src/axolotl_configs/qwen_finetune.yml'))"
+### 採点ルール
 
-# 依存関係確認
-uv pip list
+- ✓ **正解**: 内容が完全一致（順番不問）
+- ✗ **不正解**: 誤抽出、抽出漏れ、中途半端な抽出
+- ∅ **空白正解**: 正解データ＆予測ともに空白（分母除外）
+
+### 正解率計算
+
+```
+正解率 = 正解数 / (正解数 + 不正解数)
+※空白正解は分母に含まない
+```
+
+### 複数値の処理
+
+**区切り文字が異なる**:
+- `person_name`, `person_address`, `person_belongs_company` → `/` で区切り
+- `police_departments` → `,` で区切り
+
+評価時に、これらを正しく分割して比較する。
+
+**例**:
+```
+正解: "小林義治/古本辰則"
+予測: "小林義治,古本辰則"
+→ 不正解（区切り文字が異なる）
 ```
 
 ---
 
 ## トラブルシューティング
 
-### GPUメモリ不足（OOM）
-**症状**: `RuntimeError: CUDA out of memory`
+### メモリ不足 (OOM)
 
-**対策**:
-1. DeepSpeed ZeRO-2が正しく読み込まれているか確認
-   ```bash
-   grep "deepspeed" src/axolotl_configs/qwen_finetune.yml
-   ```
-2. バッチサイズを削減（YAML: `micro_batch_size: 1` が最小）
-3. `sequence_len` を削減（デフォルト: 1536）
+A100 80GB でも OOM が発生する場合：
 
-### 学習が進まない
-**症状**: Loss が下がらない、評価メトリクスが改善しない
-
-**対策**:
-1. データが正しくマージされているか確認
-   ```bash
-   python -c "import json; d = json.load(open('data/train/hawks_train_curriculum.json')); print(f'Total: {len(d)}, Sample: {d[0].keys()}')"
-   ```
-2. 学習率調整（YAML: `learning_rate` を2e-4から変更）
-3. 評価データの品質確認
-
-### コールバック実行エラー
-**症状**: `AttributeError: module 'callbacks' has no attribute ...`
-
-**対策**:
-1. `src/callbacks/__init__.py` が存在確認
-2. Python Pathにsrcが含まれているか確認
-   ```bash
-   export PYTHONPATH="${PYTHONPATH}:/Users/terusato/Dev/Qwen-finetune"
-   ```
-3. Axolotl plugins セクション構文をチェック
-
----
-
-## 既存ファイル参照
-
-### Unsloth版（旧実装）
-- `qwen_finetune.py`: Unsloth + SFTTrainerベースの2ステージ学習
-  - **参照用**: ロジック理解、コールバック実装確認に利用可
-  - **非推奨**: Axolotl版が新しい標準
-
-### 旧CLAUDE.md
-タスク概要とCSV評価形式の詳細は [CLAUDE.md](./CLAUDE.md) を参照
-
----
-
-## クラウドへのデプロイ
-
-### GitHub へのプッシュ
-```bash
-git add .
-git commit -m "feat: Axolotl migration with bf16 + Negative Sampling"
-git push origin main
+```yaml
+# 以下を調整（rakuten_7b_phase*.yml）
+micro_batch_size: 4  # 8 → 4
+gradient_accumulation_steps: 4  # 2 → 4
+sequence_len: 2048  # 4096 → 2048（トレードオフあり）
 ```
 
-### 別のクラウド環境での実行
+### HF トークン認証エラー
+
 ```bash
-# 1. クローン + セットアップ
-git clone https://github.com/<org>/Qwen-finetune.git
-cd Qwen-finetune
-uv sync
+# トークン設定確認
+echo $HF_AUTH_TOKEN
 
-# 2. データアップロード（AWS S3, GCS等）
-# data/train/ に3ファイルを配置
+# 再ログイン
+huggingface-cli login
 
-# 3. 学習実行
-./scripts/run_axolotl_train.sh
+# または .env を確認
+cat .env
 ```
 
-### スケーリング（GPU数変更）
-```bash
-# 8GPU で実行
-./scripts/run_axolotl_train.sh src/axolotl_configs/qwen_finetune.yml 8
+### データセット見つからない
 
-# またはYAML編集
-# src/axolotl_configs/qwen_finetune.yml の deepspeed 設定を確認
+```bash
+# データセット再ダウンロード
+rm -rf data/train data/test
+uv run download_datasets_from_hf.py
+
+# 検証
+ls -lh data/train/ data/test/
+```
+
+### Axolotl エラー
+
+```bash
+# Axolotl 再インストール
+pip install --upgrade --force-reinstall axolotl
+
+# DeepSpeed 再インストール
+pip install deepspeed
 ```
 
 ---
 
-## まとめ
+## 参考リンク
 
-| 項目 | 旧（Unsloth） | 新（Axolotl） |
-|------|--------------|--------------|
-| **設定管理** | Python CODE | YAML（git管理容易） |
-| **実行方法** | `torchrun qwen_finetune.py` | `accelerate launch -m axolotl.cli.train` |
-| **学習戦略** | 2ステージ（段階的） | 単一ステージ（Negative Sampling） |
-| **精度** | 4bit（QLoRA） | **bf16（フル精度）** |
-| **メモリ** | ~100GB/GPU | ~70-75GB/GPU（ZeRO-2） |
-| **速度** | Unsloth最適化 | **FA2ネイティブ最適化** |
-| **拡張性** | 低（カスタム実装必要） | **高（プラグイン可能）** |
-| **再現性** | 中（seed固定のみ） | **高（YAML + seed）** |
+- **Axolotl ドキュメント**: https://docs.axolotl.ai/docs/
+- **Axolotl Segments形式**: https://docs.axolotl.ai/docs/dataset-formats/template_free.html
+- **HF Dataset**: https://huggingface.co/datasets/teru00801/person-finetune-dataset1
+- **RakutenAI-7B**: https://huggingface.co/Rakuten/RakutenAI-7B-instruct
+- **MLflow**: https://mlflow.org/
 
 ---
 
-## 質問・サポート
+## ファイル説明
 
-詳細は以下を参照：
-- Axolotl公式: https://github.com/axolotl-ai-cloud/axolotl
-- Qwen公式: https://github.com/QwenLM/Qwen
-- Plan: [floofy-popping-meteor.md](.claude/plans/floofy-popping-meteor.md)
+### スクリプト
+
+| ファイル | 用途 |
+|---------|------|
+| `download_datasets_from_hf.py` | HF Hub からデータセットをダウンロード（訓練＋評価） |
+| `upload_to_hf.py` | ローカルファイルを HF Hub にアップロード |
+| `regenerate_jsonl_segments.py` | 訓練データを segments JSONL 形式で再生成 |
+
+### 設定
+
+| ファイル | 用途 |
+|---------|------|
+| `src/axolotl_configs/rakuten_7b_phase1.yml` | Phase 1（負例キャリブレーション）の Axolotl 設定 |
+| `src/axolotl_configs/rakuten_7b_phase2.yml` | Phase 2（正例学習）の Axolotl 設定 |
+| `deepspeed_configs/zero2.json` | DeepSpeed ZeRO-2 メモリ最適化設定 |
+
+### データ
+
+| ファイル | 件数 | 用途 |
+|---------|------|------|
+| `data/train/hawks_val_segments.jsonl` | 4,633 | 評価用データ |
+| `data/train/hawks_train_segments.jsonl` | 26,221 | Phase 2 訓練データ |
+| `data/train/person_dummy_segments.jsonl` | 100,000 | Phase 1 訓練 + Phase 2 リプレイ |
+| `data/test/hawks_eval_input.jsonl` | 1,064 | 推論入力 |
+| `data/test/hawks_eval_gold.csv` | 1,064 | 正解ラベル |
+
+---
+
+## 更新履歴
+
+- **2025-12-27**:
+  - Rakuten-7B ベース実装に変更
+  - Segments JSONL 形式での訓練統一
+  - Phase 1/Phase 2 訓練フロー確立
+  - 評価データセット生成・HF アップロード完了
+  - README 完全更新
+
+- **前期**:
+  - Qwen3-30B ベース実装
+  - 複数形式のデータセット試験
