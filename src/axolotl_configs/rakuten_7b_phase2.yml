@@ -91,4 +91,4 @@ weight_decay: 0.0
 special_tokens:
 
 # multi-gpu configs
-deepspeed: deepspeed_configs/zero2.json
+deepspeed: src/deepspeed_configs/zero2.json
