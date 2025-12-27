@@ -55,10 +55,6 @@ lora_target_modules:
   - k_proj
   - o_proj
 
-# lora kernel optimizations enabled (dropout must be 0)
-lora_mlp_kernel: true
-lora_qkv_kernel: true
-lora_o_kernel: true
 
 use_wandb: false
 
