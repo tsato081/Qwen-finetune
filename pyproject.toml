@@ -33,3 +33,4 @@ priority = "supplemental"
 # Pin torch packages to PyTorch cu130 index
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
