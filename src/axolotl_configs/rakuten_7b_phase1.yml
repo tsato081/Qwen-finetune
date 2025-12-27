@@ -7,20 +7,22 @@ load_in_4bit: false
 
 # Phase 1: person_dummy only (negative case calibration)
 datasets:
-  - path: data/train/person_dummy_2025-12-23-1817.json
-    type: alpaca
-    field_instruction: instruction
-    field_input: input
-    field_output: output
+  - path: data/train/person_dummy_segments.jsonl
+    type: input_output
+    train_on_inputs: false
 
 dataset_prepared_path: last_run_prepared
-val_set_size: 0.1
+val_set_size: 0
 output_dir: ./outputs/lora-out-phase1
+
+test_datasets:
+  - path: data/train/hawks_val_segments.jsonl
+    type: input_output
 
 adapter: lora
 lora_model_dir:
 
-sequence_len: 2048
+sequence_len: 4096
 sample_packing: true
 eval_sample_packing: false
 pad_to_sequence_len: true
@@ -53,7 +55,8 @@ hf_mlflow_log_artifacts: false
 
 gradient_accumulation_steps: 2
 micro_batch_size: 8
-num_epochs: 0.5
+max_steps: 1000
+num_epochs: 1
 optimizer: adamw_bnb_8bit
 lr_scheduler: cosine
 learning_rate: 0.0002

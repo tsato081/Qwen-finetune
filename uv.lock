@@ -3897,12 +3897,14 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "axolotl" },
+    { name = "huggingface-hub" },
     { name = "mlflow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "axolotl", specifier = ">=0.4.0" },
+    { name = "huggingface-hub", specifier = ">=0.36.0" },
     { name = "mlflow", specifier = ">=2.9.2" },
 ]
 

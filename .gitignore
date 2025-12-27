@@ -43,3 +43,9 @@ mlruns/
 accelerate_config.yaml
 hawks-prompts/
 docs/
+
+# HF upload script (local development only)
+upload_to_hf.py
+
+# JSONL generation scripts (local development only)
+regenerate_jsonl_segments.py
