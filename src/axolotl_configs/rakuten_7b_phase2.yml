@@ -19,6 +19,17 @@ dataset_prepared_path: last_run_prepared
 val_set_size: 0
 output_dir: ./outputs/lora-out-phase2
 
+# ============================================================
+# Model Merging & HF Hub Upload
+# ============================================================
+merge_lora: true
+hf_use_auth_token: true
+
+# Optional: Upload LoRA adapters during training
+# Uncomment to enable automatic adapter uploads
+# hub_model_id: teru00801/rakuten-7b-instruct-person-lora
+# hub_strategy: end  # "checkpoint" for every save, "end" for final only
+
 test_datasets:
   - path: data/train/hawks_val_segments.jsonl
     type: input_output

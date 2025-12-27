@@ -441,6 +441,194 @@ except json.JSONDecodeError:
 
 ---
 
+## モデルマージ & HF Hub アップロード
+
+### 概要
+
+Phase 2 訓練完了後、LoRA アダプターをベースモデルとマージして最終版モデルを作成し、Hugging Face Hub に自動アップロードします。
+
+**2段階フロー**:
+
+1. **訓練実行** → LoRA アダプターを `./outputs/lora-out-phase2/checkpoint-final/` に保存 + マージ版を `./outputs/lora-out-phase2/merged/` に生成
+2. **アップロード実行** → マージ版 + 自動生成 Model Card を HF Hub にアップロード
+
+### 訓練時のマージ設定
+
+Phase 2 config (`src/axolotl_configs/rakuten_7b_phase2.yml`) に以下が自動的に設定されています：
+
+```yaml
+# ============================================================
+# Model Merging & HF Hub Upload
+# ============================================================
+merge_lora: true
+hf_use_auth_token: true
+
+# Optional: Upload LoRA adapters during training
+# Uncomment to enable automatic adapter uploads
+# hub_model_id: teru00801/rakuten-7b-instruct-person-lora
+# hub_strategy: end  # "checkpoint" for every save, "end" for final only
+```
+
+- `merge_lora: true` → 訓練完了後にマージ版を自動生成
+- `hf_use_auth_token: true` → HF Hub 認証有効化
+
+### マージ版とアダプター版の違い
+
+| 特性 | マージ版 | アダプター版 |
+|------|--------|-----------|
+| **サイズ** | 14-15GB（スタンドアロン） | 数MB（LoRA重みのみ） |
+| **必要なもの** | マージ版だけで推論可能 | ベースモデル + アダプターで推論 |
+| **用途** | 本番運用推奨 | 開発・比較用 |
+| **アップロード方法** | `upload_merged_model.py` | Axolotl自動 (`hub_strategy` 設定) |
+
+### 完全自動化: `upload_merged_model.py`
+
+**実行方法**:
+
+```bash
+# 訓練実行
+axolotl train src/axolotl_configs/rakuten_7b_phase2.yml
+
+# 完了後、自動でマージ＆Model Card生成＆アップロード
+python3 upload_merged_model.py
+```
+
+**または、一括実行:**
+
+```bash
+axolotl train src/axolotl_configs/rakuten_7b_phase2.yml && python3 upload_merged_model.py
+```
+
+**スクリプトの処理**:
+
+1. **Step 1: Model Card 生成**
+   - `./outputs/lora-out-phase2/merged/README.md` を自動生成
+   - 使用方法、出力フォーマット、モデル詳細を記載
+
+2. **Step 2: HF Hub アップロード**
+   - マージ版全体をアップロード（config.json, model weights, tokenizer など）
+   - Model Card も一緒にアップロード
+
+3. **成功時の出力**:
+```
+================================================================================
+✓ SUCCESS
+================================================================================
+Model URL: https://huggingface.co/teru00801/rakuten-7b-instruct-person
+Model Card: https://huggingface.co/teru00801/rakuten-7b-instruct-person/blob/main/README.md
+
+You can now use it with:
+  from_pretrained('teru00801/rakuten-7b-instruct-person')
+================================================================================
+```
+
+### マージ版の手動確認
+
+```bash
+# マージ版の内容確認
+ls -lh ./outputs/lora-out-phase2/merged/
+
+# 期待される出力:
+# config.json               (< 1KB)
+# generation_config.json    (< 1KB)
+# pytorch_model.bin         (14GB) または model-*.safetensors
+# README.md                 (自動生成)
+# special_tokens_map.json   (< 1KB)
+# tokenizer_config.json     (< 1KB)
+# tokenizer.json            (2-5MB)
+# tokenizer.model           (100KB-500KB)
+```
+
+### HF Hub での確認
+
+アップロード完了後：
+
+```bash
+# Web UI で確認
+https://huggingface.co/teru00801/rakuten-7b-instruct-person
+
+# ファイル一覧（Files タブ）
+# ├── config.json
+# ├── pytorch_model.bin
+# ├── README.md (Model Card)
+# ├── tokenizer.json
+# └── ...
+
+# Model Card は自動的に表示される
+```
+
+### マージ版モデルの使用例
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# HF Hub から直接ロード（ベースモデル不要）
+model = AutoModelForCausalLM.from_pretrained(
+    "teru00801/rakuten-7b-instruct-person",
+    trust_remote_code=True,
+    device_map="auto",
+    torch_dtype="auto"
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "teru00801/rakuten-7b-instruct-person",
+    trust_remote_code=True
+)
+
+# 推論
+messages = [
+    {"role": "system", "content": "あなたはニュース記事から犯罪者情報を抽出するアシスタント..."},
+    {"role": "user", "content": "Content:記事本文..."}
+]
+prompt = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True
+)
+
+inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+with torch.no_grad():
+    outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+
+response = tokenizer.decode(outputs[0], skip_special_tokens=False)
+print(response)
+```
+
+### トラブルシューティング
+
+**マージ版が生成されない**:
+```bash
+# 1. merge_lora が true に設定されているか確認
+grep "merge_lora" src/axolotl_configs/rakuten_7b_phase2.yml
+
+# 2. 訓練が正常に完了しているか確認
+ls -lh ./outputs/lora-out-phase2/checkpoint-final/
+```
+
+**アップロード失敗時**:
+```bash
+# 1. HF トークン確認
+echo $HF_AUTH_TOKEN
+cat .env | grep HF_AUTH_TOKEN
+
+# 2. 再ログイン
+huggingface-cli login
+
+# 3. 手動アップロード試行
+huggingface-cli upload teru00801/rakuten-7b-instruct-person ./outputs/lora-out-phase2/merged
+```
+
+**ディスク容量不足**:
+```bash
+# マージ版は約14-15GB必要
+df -h ./outputs/
+
+# 不要なチェックポイントを削除
+rm -rf ./outputs/lora-out-phase2/checkpoint-*/
+# checkpoint-final は保持推奨
+```
+
+---
+
 ## トラブルシューティング
 
 ### メモリ不足 (OOM)
