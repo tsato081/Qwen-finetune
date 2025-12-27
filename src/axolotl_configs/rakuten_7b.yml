@@ -14,7 +14,7 @@ datasets:
     type: alpaca
 dataset_prepared_path: last_run_prepared
 val_set_size: 0.1
-output_dir: ./outputs/qlora-out
+output_dir: ./outputs/lora-out
 
 adapter: lora
 lora_model_dir:
@@ -51,8 +51,8 @@ mlflow_experiment_name: str | None
 mlflow_run_name: str | None
 hf_mlflow_log_artifacts: bool | None
 
-gradient_accumulation_steps: 4
-micro_batch_size: 2
+gradient_accumulation_steps: 2
+micro_batch_size: 8
 num_epochs: 1
 optimizer: adamw_bnb_8bit
 lr_scheduler: cosine
