@@ -86,6 +86,7 @@ def download_datasets():
                     repo_id=repo_id,
                     filename=file_name,
                     repo_type=repo_type,
+                    token=HF_TOKEN,
                     cache_dir=str(target_dir.parent / ".cache"),
                     force_download=False,
                     resume_download=True
