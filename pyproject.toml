@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = "==3.11.*"
 dependencies = [
     "torch==2.9.1",
-    "axolotl",
     "huggingface-hub",
     "mlflow",
 ]

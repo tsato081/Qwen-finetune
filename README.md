@@ -104,14 +104,14 @@ pip install uv
 **ステップ 3-1: 基本パッケージをインストール**
 
 ```bash
-# uv で依存パッケージをインストール（PyTorch, Axolotl など）
+# uv で依存パッケージをインストール（PyTorch など）
 uv sync
 ```
 
 このコマンドが以下を自動実行します:
 - `pyproject.toml` から依存パッケージを読込
 - CUDA 13.0用の PyTorch ホイール（cu130）を取得
-- Axolotl、HuggingFace、MLflow などをインストール
+- HuggingFace Hub、MLflow などをインストール
 
 **ステップ 3-2: Flash-Attention をインストール（別途）**
 
@@ -123,7 +123,16 @@ PyTorch インストール完了後、flash-attn をビルド分離なしでイ�
 uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
 ```
 
-> **注**: flash-attn はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
+**ステップ 3-3: Axolotl をインストール（別途）**
+
+Axolotl は依存関係が複雑（複数の torch バージョンに対応）なため、別途インストール：
+
+```bash
+# GitHub リポジトリから直接インストール（最新版）
+pip install git+https://github.com/OpenAccess-AI-Collective/axolotl.git
+```
+
+> **注**: flash-attn と axolotl はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
 
 ### ステップ4: HF トークンを設定
 
