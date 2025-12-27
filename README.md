@@ -52,15 +52,15 @@
 │       └── hawks_eval_gold.csv             # 正解ラベル（1,064件）
 │
 ├── src/
-│   └── axolotl_configs/
-│       ├── rakuten_7b_phase1.yml           # Phase 1設定
-│       └── rakuten_7b_phase2.yml           # Phase 2設定
-│
-├── deepspeed_configs/
-│   └── zero2.json                      # DeepSpeed ZeRO-2設定
+│   ├── axolotl_configs/
+│   │   ├── rakuten_7b_phase1.yml           # Phase 1設定
+│   │   └── rakuten_7b_phase2.yml           # Phase 2設定
+│   └── deepspeed_configs/
+│       └── zero2.json                      # DeepSpeed ZeRO-2設定
 │
 ├── download_datasets_from_hf.py        # HFからデータセットをダウンロード
 ├── upload_to_hf.py                     # ローカルデータセットをHFにアップロード
+├── evaluate_model.py                   # モデル評価スクリプト
 ├── regenerate_jsonl_segments.py        # 訓練データをsegments形式で再生成
 │
 ├── outputs/                            # 訓練出力（.gitignoreに含む）

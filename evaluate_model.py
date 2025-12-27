@@ -1,12 +1,15 @@
+#!/usr/bin/env python3
 """
-Run inference on the test CSV and export predictions + metrics.
+Evaluate model on hawks evaluation dataset (JSONL input + CSV gold labels).
 
 Supports:
 - Axolotl LoRA outputs (adapter_model.safetensors + adapter_config.json)
 - Fully merged model directories
 
+Evaluates with 3-state metrics: correct, incorrect, blank-correct.
+
 Example:
-    python3 finetune_inference.py
+    python3 evaluate_model.py
 """
 
 import csv
@@ -29,14 +32,15 @@ CSV_FIELDS = [
 
 
 @dataclass
-class InferenceConfig:
-    model_dir: Path = Path("outputs/axolotl_qwen_finetune")
-    base_model: Optional[str] = None
-    test_csv: Path = Path("data/test/Hawks_正解データマスター - ver 5.0 csv出力用.csv")
-    instruction_source: Path = Path("data/train/hawks_train.json")
-    output_csv: Path = Path("outputs/test_predictions.csv")
-    output_metrics: Path = Path("outputs/test_metrics.json")
-    max_seq_length: int = 1536
+class EvalConfig:
+    model_dir: Path = Path("outputs/lora-out-phase2/checkpoint-5000")
+    base_model: Optional[str] = "Rakuten/RakutenAI-7B-instruct"
+    eval_input: Path = Path("data/test/hawks_eval_input.jsonl")
+    eval_gold: Path = Path("data/test/hawks_eval_gold.csv")
+    instruction_source: Path = Path("data/train/hawks_train_segments.jsonl")
+    output_csv: Path = Path("outputs/eval_predictions.csv")
+    output_metrics: Path = Path("outputs/eval_metrics.json")
+    max_seq_length: int = 4096
     max_new_tokens: int = 1024
     batch_size: int = 1
     max_samples: Optional[int] = None
@@ -62,7 +66,7 @@ def resolve_base_model(adapter_dir: Path, override: Optional[str]) -> Optional[s
     return cfg.get("base_model_name_or_path")
 
 
-def load_model_and_tokenizer(cfg: InferenceConfig) -> Tuple[Any, Any]:
+def load_model_and_tokenizer(cfg: EvalConfig) -> Tuple[Any, Any]:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     load_kwargs: Dict[str, Any] = {
@@ -98,13 +102,12 @@ def load_model_and_tokenizer(cfg: InferenceConfig) -> Tuple[Any, Any]:
     return model, tokenizer
 
 
-def load_instruction(path: Path) -> str:
-    if not path.exists():
+def normalize_value(value: Any) -> str:
+    if value is None:
         return ""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not data:
-        return ""
-    return (data[0].get("instruction") or "").strip()
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
 
 
 def parse_json_object_from_text(text: str) -> Dict[str, Any] | None:
@@ -123,14 +126,6 @@ def parse_json_object_from_text(text: str) -> Dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return obj if isinstance(obj, dict) else None
-
-
-def normalize_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    return str(value).strip()
 
 
 def extract_offenders(output_obj: Dict[str, Any] | None) -> List[Dict[str, Any]]:
@@ -193,67 +188,164 @@ def load_test_rows(path: Path) -> List[Dict[str, str]]:
         return list(reader)
 
 
-def build_prompt_text(instruction: str, title: str, body: str) -> List[Dict[str, str]]:
-    user_content = f"Content:{title}{body}"
-    messages = []
-    if instruction:
-        messages.append({"role": "system", "content": instruction})
-    messages.append({"role": "user", "content": user_content})
-    return messages
+def load_instruction_from_segments(path: Path) -> str:
+    """Load instruction from segments format JSONL.
+
+    Concatenates segments with label=false.
+    """
+    if not path.exists():
+        return ""
+
+    with path.open("r", encoding="utf-8") as f:
+        first_line = f.readline()
+
+    try:
+        obj = json.loads(first_line)
+    except json.JSONDecodeError:
+        return ""
+
+    segments = obj.get("segments", [])
+    instruction_parts = []
+
+    for seg in segments:
+        if not seg.get("label", False):  # label=false only
+            instruction_parts.append(seg.get("text", ""))
+        else:
+            break  # Stop when label=true
+
+    return "".join(instruction_parts).strip()
 
 
-def compute_csv_metrics(pred_rows: Sequence[Dict[str, str]], gold_rows: Sequence[Dict[str, str]]) -> Dict[str, float]:
-    assert len(pred_rows) == len(gold_rows)
+def load_jsonl_inputs(path: Path) -> List[Dict[str, str]]:
+    """Load evaluation input JSONL.
+
+    Format: {"id": "LVP0214", "body": "..."}
+    Output: [{"quality_test_id": "...", "body": "...", "title": ""}, ...]
+    """
+    records = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            records.append(
+                {
+                    "quality_test_id": obj["id"],
+                    "body": obj["body"],
+                    "title": "",  # Eval data has no title
+                }
+            )
+    return records
+
+
+def compute_detailed_metrics(
+    pred_rows: Sequence[Dict[str, str]], gold_rows: Sequence[Dict[str, str]]
+) -> Dict[str, Any]:
+    """Compute 3-state evaluation metrics.
+
+    States per field:
+    - correct: pred == gold and both non-empty
+    - incorrect: pred != gold and at least one non-empty
+    - blank_match: pred == gold == ""
+
+    blank-vs-blank excluded from denominator for accuracy.
+    """
     total = len(gold_rows)
-    if total == 0:
-        return {}
-
-    field_matches = {k: 0 for k in CSV_FIELDS}
-    all_fields_match = 0
+    field_states = {k: {"correct": 0, "incorrect": 0, "blank_match": 0} for k in CSV_FIELDS}
+    all_match = 0
 
     for pred, gold in zip(pred_rows, gold_rows):
-        if all(normalize_value(pred.get(k)) == normalize_value(gold.get(k)) for k in CSV_FIELDS):
-            all_fields_match += 1
+        row_all_match = True
         for k in CSV_FIELDS:
-            if normalize_value(pred.get(k)) == normalize_value(gold.get(k)):
-                field_matches[k] += 1
+            p = normalize_value(pred.get(k))
+            g = normalize_value(gold.get(k))
 
-    metrics: Dict[str, float] = {
-        "samples": float(total),
-        "all_fields_exact_match_rate": all_fields_match / total,
+            if p == g:
+                if p == "":
+                    field_states[k]["blank_match"] += 1
+                else:
+                    field_states[k]["correct"] += 1
+            else:
+                field_states[k]["incorrect"] += 1
+                row_all_match = False
+
+        if row_all_match:
+            all_match += 1
+
+    metrics: Dict[str, Any] = {
+        "total_samples": total,
+        "all_fields_exact_match": all_match,
+        "all_fields_exact_match_rate": all_match / total if total > 0 else 0.0,
     }
+
     for k in CSV_FIELDS:
-        metrics[f"field_exact_match_rate/{k}"] = field_matches[k] / total
+        correct = field_states[k]["correct"]
+        incorrect = field_states[k]["incorrect"]
+        blank = field_states[k]["blank_match"]
+        denominator = correct + incorrect  # blank excluded
+
+        metrics[f"{k}/correct"] = correct
+        metrics[f"{k}/incorrect"] = incorrect
+        metrics[f"{k}/blank_match"] = blank
+        metrics[f"{k}/accuracy"] = correct / denominator if denominator > 0 else 0.0
+        metrics[f"{k}/total_non_blank"] = denominator
+
     return metrics
 
 
 def main() -> None:
-    cfg = InferenceConfig()
+    cfg = EvalConfig()
 
+    # Validate inputs
     if not cfg.model_dir.exists():
         raise FileNotFoundError(f"Model dir not found: {cfg.model_dir}")
-    if not cfg.test_csv.exists():
-        raise FileNotFoundError(f"Test CSV not found: {cfg.test_csv}")
+    if not cfg.eval_input.exists():
+        raise FileNotFoundError(f"Eval input not found: {cfg.eval_input}")
+    if not cfg.eval_gold.exists():
+        raise FileNotFoundError(f"Gold labels not found: {cfg.eval_gold}")
 
-    instruction = load_instruction(cfg.instruction_source)
-    rows = load_test_rows(cfg.test_csv)
+    print(f"\n{'='*80}")
+    print("Model Evaluation")
+    print(f"{'='*80}")
+    print(f"Model dir: {cfg.model_dir}")
+    print(f"Eval input: {cfg.eval_input}")
+    print(f"Gold labels: {cfg.eval_gold}")
+
+    # 1. Load data
+    print("\nLoading data...")
+    instruction = load_instruction_from_segments(cfg.instruction_source)
+    rows = load_jsonl_inputs(cfg.eval_input)
+    gold_rows = load_test_rows(cfg.eval_gold)
+
     if cfg.max_samples:
         rows = rows[: cfg.max_samples]
+        gold_rows = gold_rows[: cfg.max_samples]
 
+    print(f"  Instruction loaded: {len(instruction)} chars")
+    print(f"  Eval samples: {len(rows)}")
+    print(f"  Gold samples: {len(gold_rows)}")
+
+    if len(rows) != len(gold_rows):
+        raise ValueError(f"Sample count mismatch: {len(rows)} vs {len(gold_rows)}")
+
+    # 2. Load model
+    print("\nLoading model...")
     model, tokenizer = load_model_and_tokenizer(cfg)
     model.eval()
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    truncation_side_orig = getattr(tokenizer, "truncation_side", "right")
     tokenizer.truncation_side = "left"
 
+    # 3. Build prompts
+    print("\nBuilding prompts...")
     prompts: List[str] = []
     for row in rows:
-        title = row.get("title") or ""
         body = row.get("body") or ""
-        messages = build_prompt_text(instruction, title, body)
+        messages = [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": f"Content:{body}"},
+        ]
         prompts.append(
             tokenizer.apply_chat_template(
                 messages,
@@ -262,8 +354,9 @@ def main() -> None:
             )
         )
 
+    # 4. Run inference
+    print(f"\nRunning inference ({len(prompts)} samples, batch_size={cfg.batch_size})...")
     pred_rows: List[Dict[str, str]] = []
-    raw_outputs: List[str] = []
 
     import torch
 
@@ -284,6 +377,7 @@ def main() -> None:
                 max_new_tokens=cfg.max_new_tokens,
                 do_sample=False,
             )
+
             attention_mask = inputs.get("attention_mask")
             for i in range(len(batch_prompts)):
                 prompt_len = (
@@ -293,15 +387,16 @@ def main() -> None:
                 )
                 gen_tokens = generated[i][prompt_len:]
                 text = tokenizer.decode(gen_tokens, skip_special_tokens=False)
-                raw_outputs.append(text)
                 obj = parse_json_object_from_text(text)
-                pred_rows.append(to_csv_like_fields(obj) if obj is not None else {k: "" for k in CSV_FIELDS})
+                pred_rows.append(to_csv_like_fields(obj) if obj else {k: "" for k in CSV_FIELDS})
 
-    tokenizer.truncation_side = truncation_side_orig
+            if (start + cfg.batch_size) % 100 == 0 or (start + cfg.batch_size) >= len(prompts):
+                progress = min(start + cfg.batch_size, len(prompts))
+                print(f"  Progress: {progress}/{len(prompts)}")
 
-    output_dir = cfg.output_csv.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+    # 5. Write predictions
+    print(f"\nWriting predictions...")
+    cfg.output_csv.parent.mkdir(parents=True, exist_ok=True)
     with cfg.output_csv.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["quality_test_id", *CSV_FIELDS])
         writer.writeheader()
@@ -310,15 +405,31 @@ def main() -> None:
             out_row.update({k: pred.get(k, "") for k in CSV_FIELDS})
             writer.writerow(out_row)
 
-    gold_rows = [
-        {k: row.get(k, "") for k in CSV_FIELDS}
-        for row in rows
-    ]
-    metrics = compute_csv_metrics(pred_rows, gold_rows)
+    # 6. Compute metrics
+    print(f"\nComputing metrics...")
+    gold_csv_rows = [{k: row.get(k, "") for k in CSV_FIELDS} for row in gold_rows]
+    metrics = compute_detailed_metrics(pred_rows, gold_csv_rows)
+
+    # 7. Write metrics
     cfg.output_metrics.write_text(json.dumps(metrics, ensure_ascii=False, indent=2))
 
-    print(f"wrote predictions: {cfg.output_csv}")
-    print(f"wrote metrics: {cfg.output_metrics}")
+    # Summary
+    print(f"\n{'='*80}")
+    print("Results Summary")
+    print(f"{'='*80}")
+    print(f"Total samples: {metrics['total_samples']}")
+    print(f"All fields exact match: {metrics['all_fields_exact_match']}/{metrics['total_samples']}")
+    print(f"All fields exact match rate: {metrics['all_fields_exact_match_rate']:.2%}")
+    print(f"\nPer-field accuracy (blank-vs-blank excluded from denominator):")
+    for k in CSV_FIELDS:
+        acc = metrics[f"{k}/accuracy"]
+        total_non_blank = metrics[f"{k}/total_non_blank"]
+        print(f"  {k}: {acc:.2%} ({total_non_blank} non-blank)")
+
+    print(f"\n{'='*80}")
+    print(f"Predictions: {cfg.output_csv}")
+    print(f"Metrics: {cfg.output_metrics}")
+    print(f"{'='*80}")
 
 
 if __name__ == "__main__":
