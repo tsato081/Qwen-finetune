@@ -105,7 +105,7 @@ pip install uv
 
 ```bash
 # uv で依存パッケージをインストール（PyTorch など）
-uv sync
+uv sync --frozen
 ```
 
 このコマンドが以下を自動実行します:
