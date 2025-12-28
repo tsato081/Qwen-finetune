@@ -110,12 +110,26 @@ uv sync --frozen
 
 このコマンドが以下を自動実行します:
 - `pyproject.toml` から依存パッケージを読込
-- CUDA 13.0用の PyTorch ホイール（cu130）を取得
+- CUDA 13.0用の PyTorch ホイール（cu130）を取得（torch/torchvision/torchaudio を cu130 で固定）
 - HuggingFace Hub、MLflow などをインストール
 
-**ステップ 3-2: Flash-Attention をインストール（別途）**
+> **重要**: `pip install torch/torchvision/torchaudio ...` のように手で入れ直すと、CUDA メジャー違い（cu128 など）が混ざって壊れやすいです。原則 `uv sync --frozen` で復旧・再現してください。
 
-PyTorch インストール完了後、flash-attn をビルド分離なしでインストール：
+**ステップ 3-2: DeepSpeed をインストール（別途）**
+
+本リポジトリの Axolotl 設定は `deepspeed: src/deepspeed_configs/zero2.json` を使うため、DeepSpeed を別途インストールします（ビルド/環境依存が強いので `uv sync` には含めません）。
+
+```bash
+# （Axolotl 公式手順に合わせて）ビルド系ツールを先に揃える
+uv pip install -U packaging==23.2 setuptools==75.8.0 wheel ninja
+
+# DeepSpeed をインストール
+uv pip install --no-build-isolation deepspeed
+```
+
+**ステップ 3-3: Flash-Attention をインストール（別途）**
+
+PyTorch インストール完了後、flash-attn をプリコンパイル済みホイールでインストール（`uv sync` には含めません）：
 
 ```bash
 # flash-attention のプリコンパイル済みホイール（CUDA 13.0対応）をインストール
@@ -123,16 +137,19 @@ PyTorch インストール完了後、flash-attn をビルド分離なしでイ�
 uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
 ```
 
-**ステップ 3-3: Axolotl をインストール（別途）**
+**ステップ 3-4: Axolotl をインストール（別途）**
 
 Axolotl は依存関係が複雑（複数の torch バージョンに対応）なため、別途インストール：
 
 ```bash
-# GitHub リポジトリから直接インストール（最新版）
-pip install git+https://github.com/OpenAccess-AI-Collective/axolotl.git
+# v0.13.0 (PyTorch 2.9 / CUDA 13 対応)
+uv pip install --no-build-isolation axolotl-ai==0.13.0
+
+# Opt-out telemetry（任意）
+export AXOLOTL_DO_NOT_TRACK=1
 ```
 
-> **注**: flash-attn と axolotl はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
+> **注**: DeepSpeed / flash-attn / Axolotl はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
 
 ### ステップ4: HF トークンを設定
 
@@ -158,16 +175,16 @@ sudo apt-get update && sudo apt-get install -y tmux
 
 ```bash
 # Python バージョン確認
-python --version          # Python 3.11.x であること
+uv run python --version          # Python 3.11.x であること
 
 # CUDA 確認
 nvidia-smi                # CUDA 13.0, NVIDIA Driver 580 以降 が表示されること
 
 # PyTorch インストール確認
-python -c "import torch; print(f'PyTorch {torch.__version__}')"
+uv run python -c "import torch, torchvision, torchaudio; print(torch.__version__, torch.version.cuda, torchvision.__version__, torchaudio.__version__)"
 
 # Axolotl 確認
-python -c "import axolotl; print('✓ Axolotl ready')"
+uv run python -c "import axolotl; print('✓ Axolotl ready')"
 
 # HF トークン確認
 echo $HF_AUTH_TOKEN       # "hf_" で始まる トークンが表示されること
@@ -205,7 +222,7 @@ tmux セッション内で訓練を開始：
 
 ```bash
 # tmux セッションに コマンドを送信
-tmux send-keys -t training "cd /path/to/Qwen-finetune && bash train_all.sh" Enter
+tmux send-keys -t training "cd /path/to/Qwen-finetune && uv run bash train_all.sh" Enter
 ```
 
 このコマンドが以下を**全自動**で順番に実行します：
