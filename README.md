@@ -233,7 +233,9 @@ uv run download_datasets_from_hf.py
 
 ```bash
 mkdir -p logs
-uv run axolotl train src/axolotl_configs/gpt-oss_20b.yml 2>&1 | tee "logs/gpt-oss_20b_$(date +%Y%m%d_%H%M%S).log"
+accelerate launch --num_processes 4 --multi_gpu \
+  -m axolotl.cli.train src/axolotl_configs/gpt-oss_20b.yml \
+  2>&1 | tee "logs/gpt-oss_20b_$(date +%Y%m%d_%H%M%S).log"
 ```
 
 ### ステップ3: モデルマージ（Ollama 用）
