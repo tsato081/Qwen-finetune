@@ -111,10 +111,10 @@ uv sync --frozen
 
 このコマンドが以下を自動実行します:
 - `pyproject.toml` から依存パッケージを読込
-- CUDA 13.0用の PyTorch ホイール（cu130）を取得（torch/torchvision/torchaudio を cu130 で固定）
+- CUDA 12.8用の PyTorch ホイール（cu128）を取得（torch/torchvision/torchaudio を cu128 で固定）
 - HuggingFace Hub、MLflow などをインストール
 
-> **重要**: `pip install torch/torchvision/torchaudio ...` のように手で入れ直すと、CUDA メジャー違い（cu128 など）が混ざって壊れやすいです。原則 `uv sync --frozen` で復旧・再現してください。
+> **重要**: `pip install torch/torchvision/torchaudio ...` のように手で入れ直すと、CUDA メジャー違い（cu128/cu130 など）が混ざって壊れやすいです。原則 `uv sync --frozen` で復旧・再現してください。
 
 **ステップ 3-2: DeepSpeed をインストール（別途）**
 
@@ -133,9 +133,9 @@ uv pip install --no-build-isolation deepspeed
 PyTorch インストール完了後、flash-attn をプリコンパイル済みホイールでインストール（`uv sync` には含めません）：
 
 ```bash
-# flash-attention のプリコンパイル済みホイール（CUDA 13.0対応）をインストール
+# flash-attention のプリコンパイル済みホイール（CUDA 12.8対応）をインストール
 # PyTorch をロード状態でインストール（ビルド分離を避ける）
-uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu130torch2.9-cp311-cp311-linux_x86_64.whl
+uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.0/flash_attn-2.8.3%2Bcu128torch2.9-cp311-cp311-linux_x86_64.whl
 ```
 
 **ステップ 3-4: Axolotl をインストール（別途）**
@@ -143,14 +143,31 @@ uv pip install --no-build-isolation https://github.com/mjun0812/flash-attention-
 Axolotl は依存関係が複雑（複数の torch バージョンに対応）なため、別途インストール：
 
 ```bash
-# v0.13.0 (PyTorch 2.9 / CUDA 13 対応)
-uv pip install --no-build-isolation axolotl-ai==0.13.0
+# v0.13.0 (PyTorch 2.9 / CUDA 12.8 でも動作可)
+uv pip install --no-build-isolation uv pip install "git+https://github.com/axolotl-ai-cloud/axolotl@v0.13.0"
 
 # Opt-out telemetry（任意）
 export AXOLOTL_DO_NOT_TRACK=1
 ```
 
 > **注**: DeepSpeed / flash-attn / Axolotl はビルド依存関係が複雑なため、PyTorch インストール後に別ステップでインストールしています
+
+**正しい状態の確認（必須）**
+
+```bash
+uv run python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.version.cuda)
+PY
+
+nvcc --version
+```
+
+期待される結果:
+- `torch.__version__` が `2.9.0+cu128`
+- `torch.version.cuda` が `12.8`
+- `nvcc` が `12.8`
 
 ### ステップ4: HF トークンを設定
 
@@ -179,7 +196,7 @@ sudo apt-get update && sudo apt-get install -y tmux
 uv run python --version          # Python 3.11.x であること
 
 # CUDA 確認
-nvidia-smi                # CUDA 13.0, NVIDIA Driver 580 以降 が表示されること
+nvidia-smi                # CUDA Version が 12.8 以上、Driver 580 以降が表示されること
 
 # PyTorch インストール確認
 uv run python -c "import torch, torchvision, torchaudio; print(torch.__version__, torch.version.cuda, torchvision.__version__, torchaudio.__version__)"
