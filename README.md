@@ -2,9 +2,9 @@
 
 日本語のニュース・事件記事から犯罪者情報（名前、年齢、住所、所属、役職、違反法、犯行地、警察署）を構造化抽出するための LoRA ファインチューニング実装です。
 
-**ベースモデル**: Rakuten/RakutenAI-7B-instruct (Mistral-7B ベース)
+**ベースモデル**: openai/gpt-oss-20b
 **フレームワーク**: Axolotl + DeepSpeed (ZeRO-2)
-**トレーニング戦略**: 2フェーズ課程学習（負例キャリブレーション → 正例学習）
+**トレーニング戦略**: 単一フェーズ（hawks + dummy の混合学習）
 
 ---
 
@@ -29,12 +29,10 @@
 
 ### 訓練戦略
 
-**2フェーズ課程学習**:
+**単一フェーズ**:
 
-| フェーズ | データセット | 目的 | ステップ |
-|---------|-------------|------|--------|
-| **Phase 1** | person_dummy (100k) | 負例キャリブレーション | 1,000 |
-| **Phase 2** | hawks (26k) + dummy (20% replay) | 正例学習 + FP抑制 | 5,000 |
+- hawks（正例）+ person_dummy（空例）を混合して学習
+- 目的: 空例の学習は必要最小限にし、加害者を立てない挙動を防ぐ
 
 ---
 
@@ -44,17 +42,20 @@
 .
 ├── data/
 │   ├── train/                          # 訓練データ
-│   │   ├── hawks_val_segments.jsonl        # 評価用（4,633件）
-│   │   ├── hawks_train_segments.jsonl      # Phase 2訓練（26,221件）
-│   │   └── person_dummy_segments.jsonl     # Phase 1訓練＋Phase 2 replay（100,000件）
+│   │   ├── hawks_val_segments.jsonl        # 評価用（segments）
+│   │   ├── hawks_train_segments.jsonl      # 訓練（segments）
+│   │   ├── person_dummy_segments.jsonl     # 空例（segments）
+│   │   ├── hawks_val_messages.jsonl        # 評価用（messages）
+│   │   ├── hawks_train_messages.jsonl      # 訓練（messages）
+│   │   └── person_dummy_messages.jsonl     # 空例（messages）
 │   └── test/                           # 評価データ
 │       ├── hawks_eval_input.jsonl          # 推論入力（1,064件）
-│       └── hawks_eval_gold.csv             # 正解ラベル（1,064件）
+│       ├── hawks_eval_gold.csv             # 正解ラベル（1,064件）
+│       └── hawks_eval_messages.jsonl       # 評価用（messages）
 │
 ├── src/
 │   ├── axolotl_configs/
-│   │   ├── rakuten_7b_phase1.yml           # Phase 1設定
-│   │   └── rakuten_7b_phase2.yml           # Phase 2設定
+│   │   └── gpt-oss_20b.yml                 # 現行設定
 │   └── deepspeed_configs/
 │       └── zero2.json                      # DeepSpeed ZeRO-2設定
 │
@@ -144,7 +145,7 @@ Axolotl は依存関係が複雑（複数の torch バージョンに対応）�
 
 ```bash
 # v0.13.0 (PyTorch 2.9 / CUDA 12.8 でも動作可)
-uv pip install --no-build-isolation uv pip install "git+https://github.com/axolotl-ai-cloud/axolotl@v0.13.0"
+uv pip install --no-build-isolation "git+https://github.com/axolotl-ai-cloud/axolotl@v0.13.0"
 
 # Opt-out telemetry（任意）
 export AXOLOTL_DO_NOT_TRACK=1
@@ -215,7 +216,7 @@ tmux -V                   # tmux [version] が表示されること
 
 ---
 
-## 訓練実行
+## 現行トレーニング（gpt-oss-20b）
 
 ### ステップ1: データセットをダウンロード
 
@@ -225,55 +226,30 @@ uv run download_datasets_from_hf.py
 
 `data/train/` と `data/test/` にデータセットが配置されます。
 
-### ステップ2: tmux セッションを起動
+### ステップ2: 学習を実行（.sh は使わない）
 
-訓練は時間がかかるため、tmux セッション内で実行して接続が切れても継続するようにします：
-
-```bash
-# tmux セッション "training" を作成して起動
-tmux new-session -s training -d
-```
-
-### ステップ3: 訓練パイプライン実行
-
-tmux セッション内で訓練を開始：
+`src/axolotl_configs/gpt-oss_20b.yml` をそのまま使います。
+ログは必ずファイルに落とします。
 
 ```bash
-# tmux セッションに コマンドを送信
-tmux send-keys -t training "cd /path/to/Qwen-finetune && uv run bash train_all.sh" Enter
+mkdir -p logs
+uv run axolotl train src/axolotl_configs/gpt-oss_20b.yml 2>&1 | tee "logs/gpt-oss_20b_$(date +%Y%m%d_%H%M%S).log"
 ```
 
-このコマンドが以下を**全自動**で順番に実行します：
+### ステップ3: モデルマージ（Ollama 用）
 
-1. **Phase 1 訓練**（約30-60分）
-   - 負例（非犯罪記事）データで事前学習
-   - チェックポイント: `./outputs/lora-out-phase1/checkpoint-*/`
+`merged/` が無い場合は明示的にマージします。
 
-2. **Phase 2 訓練**（約1-2時間）
-   - Phase 1 の LoRA を初期値としてロード（推奨: `lora_model_dir`）
-   - 正例（犯罪記事）で学習 + 負例を 20% の比率でリプレイ
-   - チェックポイント: `./outputs/lora-out-phase2/checkpoint-*/`
+```bash
+axolotl merge-lora src/axolotl_configs/gpt-oss_20b.yml \
+  --lora-model-dir="./outputs/gpt-oss-out"
+```
 
-3. **モデルマージ**
-   - LoRA アダプター + ベースモデル → スタンドアロン版（フルモデル）を生成
-   - **注**: 設定/環境により `merged/` が作られないことがあります（その場合は LoRA アダプターのみが保存されます）
-   - 出力（作られる場合）: `./outputs/lora-out-phase2/merged/`（~14-15GB）
-   - `merged/` が無い場合は **明示的にマージ**する（Ollama 等のローカル推論にはマージ済みが必要）:
-     ```bash
-     axolotl merge-lora src/axolotl_configs/rakuten_7b_phase2.yml \
-       --lora-model-dir="./outputs/lora-out-phase2"
-     ```
+### ステップ4: HF Hub アップロード（任意）
 
-4. **Model Card 生成**
-   - README.md に使用方法を記載
-
-5. **HF Hub アップロード**
-   - `upload_merged_model.py` が以下のいずれかをアップロードします
-     - `merged/` が存在する場合: **マージ済みフルモデル**
-     - `merged/` が無い場合: **LoRA アダプター（`outputs/lora-out-phase2/` 直下）**
-   - URL: `https://huggingface.co/teru00801/rakuten-7b-instruct-person`
-
-**全体の所要時間**: 約2-3時間（A100 80GB）
+```bash
+uv run --no-sync ./upload_merged_model.py
+```
 
 ---
 
@@ -281,25 +257,14 @@ tmux send-keys -t training "cd /path/to/Qwen-finetune && uv run bash train_all.s
 
 #### リアルタイムモニタリング（訓練中）
 
-別ターミナルで以下を実行して、各フェーズのログをリアルタイム確認：
-
 ```bash
-# 方法 1: 最新のログを監視（推奨）
-tail -f logs/*/phase1.log   # Phase 1
-tail -f logs/*/phase2.log   # Phase 2
-tail -f logs/*/upload.log   # アップロード
-
-# 方法 2: tmux セッションの出力を表示
-tmux capture-pane -t training -p -S -100
+tail -f logs/gpt-oss_20b_*.log
 ```
 
 #### 訓練完了後
 
-全ログ一覧：
-
 ```bash
-ls -lh logs/YYYYMMDD_HHMMSS/
-# phase1.log, phase2.log, upload.log を確認
+ls -lh logs/
 ```
 
 #### tmux セッションの管理

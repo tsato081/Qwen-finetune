@@ -134,3 +134,9 @@
   - `occured_locations` → `physical_crime_occured_locations`（該当無ければ `""`）
   - `person_violated_law` → `persons[i].act`
   - `police_departments` →（現2タスクでは未抽出。必要なら別抽出タスクを追加）
+
+
+## Rules for yaml
+refer to official config reference.
+docs/axolotl_config_reference.yml
+

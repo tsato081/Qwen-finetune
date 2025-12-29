@@ -1,0 +1,81 @@
+base_model: openai/gpt-oss-20b
+use_kernels: false
+model_quantization_config: Mxfp4Config
+model_quantization_config_kwargs:
+  dequantize: true
+
+plugins:
+  - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
+
+experimental_skip_move_to_device: true  # prevent OOM by NOT putting model to GPU before sharding
+
+deepspeed: deepspeed_configs/zero2.json
+
+hub_model_id: teru00801/gpt-oss-20b-person-v1
+hub_strategy: "end"
+hf_use_auth_token: true
+
+dataset_prepared_path: ./outputs/last_run_prepared
+
+datasets:
+  - path: data/train/hawks_train_messages.jsonl
+    type: chat_template
+    train_on_inputs: false
+  - path: data/train/person_dummy_messages.jsonl
+    type: chat_template
+    weight: 0.2
+
+test_datasets:
+  - path: data/train/hawks_val_messages.jsonl
+    type: chat_template
+
+output_dir: ./outputs/gpt-oss-out/
+
+sequence_len: 4096
+sample_packing: true
+pad_to_sequence_len: true
+
+use_mlflow: true
+mlflow_tracking_uri: ./mlruns
+mlflow_experiment_name: gpt-lora-baseline
+mlflow_run_name: null
+hf_mlflow_log_artifacts: false
+
+gradient_accumulation_steps: 2
+micro_batch_size: 8
+num_epochs: 1
+optimizer: adamw_torch_fused
+lr_scheduler: cosine
+learning_rate: 0.0002
+evals_per_epoch: 4
+
+adapter: lora
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+special_tokens:
+eot_tokens:
+  - "<|end|>"
+
+warmup_ratio: 0.03
+
+gradient_checkpointing: true
+
+dataloader_num_workers: 8
+dataloader_prefetch_factor: 4
+dataloader_pin_memory: true
+
+lora_mlp_kernel: true
+lora_qkv_kernel: true
+lora_o_kernel: true
+
+flash_attention: true
