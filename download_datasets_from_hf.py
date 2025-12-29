@@ -15,7 +15,11 @@ env_path = Path(".env")
 if env_path.exists():
     load_dotenv(env_path)
 
-HF_TOKEN = os.getenv("HF_AUTH_TOKEN")
+HF_TOKEN = (
+    os.getenv("HF_AUTH_TOKEN")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_HUB_TOKEN")
+)
 
 if not HF_TOKEN:
     print("⚠ HF_AUTH_TOKEN not found")
@@ -31,17 +35,21 @@ def download_datasets():
     repo_id = "teru00801/person-finetune-dataset1"
     repo_type = "dataset"
 
-    # Training files
+    # Training files (segments + messages)
     train_files = [
         "hawks_val_segments.jsonl",
         "hawks_train_segments.jsonl",
-        "person_dummy_segments.jsonl"
+        "person_dummy_segments.jsonl",
+        "hawks_val_messages.jsonl",
+        "hawks_train_messages.jsonl",
+        "person_dummy_messages.jsonl",
     ]
 
     # Evaluation files
     eval_files = [
         "hawks_eval_input.jsonl",
-        "hawks_eval_gold.csv"
+        "hawks_eval_gold.csv",
+        "hawks_eval_messages.jsonl",
     ]
 
     train_dir = Path("./data/train")
@@ -147,7 +155,7 @@ def download_datasets():
     print("✓ Ready for training and evaluation")
     print(f"{'='*80}")
     print(f"\nYou can now run:")
-    print(f"  axolotl train src/axolotl_configs/rakuten_7b_phase1.yml")
+    print(f"  accelerate launch --num_processes 4 --multi_gpu -m axolotl.cli.train src/axolotl_configs/gpt-oss_20b.yml")
 
 
 if __name__ == "__main__":
