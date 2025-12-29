@@ -35,13 +35,13 @@ if not HF_TOKEN:
     exit(1)
 
 # Configuration
-MERGED_DIR = Path("./outputs/lora-out-phase2/merged")
-REPO_ID = "teru00801/rakuten-7b-instruct-person"
+MERGED_DIR = Path("./outputs/gpt-oss-out/merged")
+REPO_ID = "teru00801/gpt-oss-20b-person-v1"
 
 # Verify merged model exists
 if not MERGED_DIR.exists():
     print(f"✗ Error: Merged model directory not found: {MERGED_DIR}")
-    print("  Please run training first: axolotl train src/axolotl_configs/rakuten_7b_phase2.yml")
+    print("  Please run training first: axolotl train src/axolotl_configs/gpt-oss_20b.yml")
     exit(1)
 
 print(f"\n{'='*80}")
@@ -57,7 +57,7 @@ license: apache-2.0
 language:
   - ja
 tags:
-  - rakuten-ai-7b
+  - gpt-oss-20b
   - lora
   - finetuning
   - japanese
@@ -65,18 +65,15 @@ tags:
   - person-extraction
 ---
 
-# Rakuten-7B Instruct (Person Extraction - Phase 2)
+# GPT-OSS-20B (Person Extraction)
 
-日本語のニュース/事件記事から**人物情報**を構造化抽出するタスク用にLoRAファインチューニングした最終版モデル（Phase 2）です。
+日本語のニュース/事件記事から**犯罪者情報**を構造化抽出するタスク用にLoRAファインチューニングしたモデルです。
 
 ## 概要
 
-- **ベースモデル**: [Rakuten/RakutenAI-7B-instruct](https://huggingface.co/Rakuten/RakutenAI-7B-instruct)
-- **手法**: LoRA (Rank=32, Alpha=16)
-- **訓練データ**: Hawks犯罪記事 (26,221件)
-- **訓練戦略**:
-  - Phase 1: 否定例（非犯罪者）による過学習抑止
-  - Phase 2: 正例（犯罪者）による学習 + 否定例リプレイ（20%重み）
+- **ベースモデル**: [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b)
+- **手法**: LoRA (Rank=64, Alpha=128)
+- **訓練データ**: Hawks犯罪記事 + person_dummy（再生重み0.2）
 - **生成日**: {DATE}
 - **形式**: マージ版（スタンドアロン、ベースモデル不要）
 
@@ -95,33 +92,35 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # モデルの読み込み
 model = AutoModelForCausalLM.from_pretrained(
-    "teru00801/rakuten-7b-instruct-person",
+    "teru00801/gpt-oss-20b-person-v1",
     trust_remote_code=True,
     device_map="auto",
     torch_dtype="auto"
 )
 tokenizer = AutoTokenizer.from_pretrained(
-    "teru00801/rakuten-7b-instruct-person",
+    "teru00801/gpt-oss-20b-person-v1",
     trust_remote_code=True
 )
 
 # プロンプト構築
-system_instruction = """あなたは日本語の事件記事から人物情報を構造化抽出するアシスタントです。
-記事内の人物について、以下のJSONフォーマットで抽出してください:
+system_instruction = """あなたはニュース記事から犯罪者情報を抽出するアシスタントです。
+出力はJSONのみ。推測禁止。犯罪者が明確でない場合も必ずスキーマどおりのオブジェクトを返す。
 {{
   "persons": [
     {{
       "name": "人物の姓名",
       "is_real": true or false,
-      "is_offender": true or false,
+      "is_offender": true,
       "age": "年齢（数字のみ）",
       "position": "役職",
       "affiliation": "所属組織",
+      "address": "住所",
       "category": "法令違反 | PEPS | 破産 | その他",
-      "act": "違反行為（加害者のみ）",
-      "reason": "判定根拠"
+      "act": "違反行為（加害者のみ）"
     }}
-  ]
+  ],
+  "occured_locations": ["..."],
+  "police_departments": ["..."]
 }}"""
 
 article_text = """
@@ -130,7 +129,7 @@ article_text = """
 
 messages = [
     {{"role": "system", "content": system_instruction}},
-    {{"role": "user", "content": f"Content:{article_text}"}}
+    {{"role": "user", "content": f"【記事】\\n{article_text}"}}
 ]
 
 # チャットテンプレートを適用
@@ -166,45 +165,35 @@ print(response)
       "age": "45",
       "position": "社長",
       "affiliation": "ABC株式会社",
+      "address": "東京都千代田区",
       "category": "法令違反",
-      "act": "詐欺",
-      "reason": "「山田太郎社長（45）が、詐欺容疑で逮捕」から容疑者として特定"
-    }},
-    {{
-      "name": "田中花子",
-      "is_real": true,
-      "is_offender": false,
-      "age": "32",
-      "position": null,
-      "affiliation": null,
-      "category": null,
-      "act": null,
-      "reason": "被害者として言及"
+      "act": "詐欺"
     }}
-  ]
+  ],
+  "occured_locations": ["東京都千代田区"],
+  "police_departments": ["丸の内署"]
 }}
 ```
 
 ## モデル詳細
 
 ### アーキテクチャ
-- アーキテクチャ: Mistral
-- パラメータ数: 7B
+- アーキテクチャ: GPT-OSS
+- パラメータ数: 20B
 - シーケンス長: 4096トークン
 
 ### LoRA設定
-- LoRA Rank: 32
-- LoRA Alpha: 16
+- LoRA Rank: 64
+- LoRA Alpha: 128
 - LoRA Dropout: 0
 - ターゲットモジュール: gate_proj, down_proj, up_proj, q_proj, v_proj, k_proj, o_proj
 
 ### 訓練設定
-- オプティマイザ: AdamW 8-bit
-- 学習率: 1e-4
+- オプティマイザ: AdamW fused (torch)
+- 学習率: 2e-4
 - LR Scheduler: Cosine
 - バッチサイズ: 8 (micro) × 2 (accumulation) = 16
-- ウォームアップ: 5%
-- 総ステップ: 5000
+- ウォームアップ: 3%
 - DeepSpeed: ZeRO-2
 
 ## 評価
@@ -215,19 +204,14 @@ print(response)
 python3 evaluate_model.py
 ```
 
-期待される性能:
-- 全フィールド完全一致率: 60-70%（タスク難易度による）
-- 人物名抽出精度: 80%以上
-- 加害者判定精度: 85%以上
-
-詳細は [`evaluate_model.py`](https://github.com/your-org/repo/evaluate_model.py) 参照。
+詳細は `evaluate_model.py` を参照。
 
 ## ライセンス
 
 Apache License 2.0
 
 このモデルは以下のライセンス下で提供されます:
-- ベースモデル (Rakuten AI): Apache 2.0
+- ベースモデル (GPT-OSS): Apache 2.0
 - LoRA適応: Apache 2.0
 
 ## 引用
@@ -235,9 +219,9 @@ Apache License 2.0
 このモデルを使用する場合:
 
 ```bibtex
-@misc{{rakuten_person_extraction_phase2,
+@misc{{gpt_oss_person_extraction,
   author = {{Your Name}},
-  title = {{Rakuten-7B Instruct (Person Extraction - Phase 2)}},
+  title = {{GPT-OSS-20B (Person Extraction)}},
   year = {{{YEAR}}},
   publisher = {{Hugging Face}},
   howpublished = {{\\url{{https://huggingface.co/{REPO_ID}}}}}
@@ -255,7 +239,7 @@ Apache License 2.0
 
 - [Axolotl ファインチューニング](https://docs.axolotl.ai)
 - [Transformers 推論ガイド](https://huggingface.co/docs/transformers/generation)
-- [Rakuten AI 公式](https://rakuten-ai.com)
+- [GPT-OSS 公式](https://huggingface.co/openai/gpt-oss-20b)
 '''
 
 # Replace placeholders
