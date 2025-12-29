@@ -258,6 +258,11 @@ tmux send-keys -t training "cd /path/to/Qwen-finetune && uv run bash train_all.s
    - LoRA アダプター + ベースモデル → スタンドアロン版（フルモデル）を生成
    - **注**: 設定/環境により `merged/` が作られないことがあります（その場合は LoRA アダプターのみが保存されます）
    - 出力（作られる場合）: `./outputs/lora-out-phase2/merged/`（~14-15GB）
+   - `merged/` が無い場合は **明示的にマージ**する（Ollama 等のローカル推論にはマージ済みが必要）:
+     ```bash
+     axolotl merge-lora src/axolotl_configs/rakuten_7b_phase2.yml \
+       --lora-model-dir="./outputs/lora-out-phase2"
+     ```
 
 4. **Model Card 生成**
    - README.md に使用方法を記載
