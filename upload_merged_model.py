@@ -20,11 +20,18 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-HF_TOKEN = os.getenv("HF_AUTH_TOKEN")
+HF_TOKEN = (
+    os.getenv("HF_AUTH_TOKEN")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_HUB_TOKEN")
+)
 
 if not HF_TOKEN:
-    print("✗ Error: HF_AUTH_TOKEN not found in .env file")
-    print("  Please set HF_AUTH_TOKEN in your .env file or environment variables")
+    print("✗ Error: Hugging Face token not found")
+    print("  Set one of the following in .env or environment variables:")
+    print("  - HF_AUTH_TOKEN=hf_...")
+    print("  - HF_TOKEN=hf_...")
+    print("  - HUGGINGFACE_HUB_TOKEN=hf_...")
     exit(1)
 
 # Configuration
@@ -45,7 +52,7 @@ print(f"Target repository: {REPO_ID}")
 print(f"Token: ✓ Configured\n")
 
 # Generate Model Card (README.md)
-MODEL_CARD = """---
+MODEL_CARD = '''---
 license: apache-2.0
 language:
   - ja
@@ -249,7 +256,7 @@ Apache License 2.0
 - [Axolotl ファインチューニング](https://docs.axolotl.ai)
 - [Transformers 推論ガイド](https://huggingface.co/docs/transformers/generation)
 - [Rakuten AI 公式](https://rakuten-ai.com)
-"""
+'''
 
 # Replace placeholders
 MODEL_CARD = MODEL_CARD.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))

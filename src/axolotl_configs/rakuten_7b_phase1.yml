@@ -2,7 +2,7 @@ base_model: Rakuten/RakutenAI-7B-instruct
 model_type: MistralForCausalLM
 tokenizer_type: LlamaTokenizer
 
-load_in_8bit: true
+load_in_8bit: false
 load_in_4bit: false
 
 # Phase 1: person_dummy only (negative case calibration)
@@ -51,14 +51,13 @@ hf_mlflow_log_artifacts: false
 
 gradient_accumulation_steps: 2
 micro_batch_size: 8
-max_steps: 1000
-num_epochs: 1
+max_steps: 100
 optimizer: adamw_bnb_8bit
 lr_scheduler: cosine
 learning_rate: 0.0002
 
 bf16: auto
-tf32: false
+tf32: true
 
 gradient_checkpointing: true
 resume_from_checkpoint:
@@ -76,3 +75,11 @@ special_tokens:
 
 # multi-gpu configs
 deepspeed: src/deepspeed_configs/zero2.json
+
+dataloader_num_workers: 8
+dataloader_prefetch_factor: 4
+dataloader_pin_memory: true
+
+lora_mlp_kernel: true
+lora_qkv_kernel: true
+lora_o_kernel: true

@@ -65,9 +65,10 @@
 │
 ├── outputs/                            # 訓練出力（.gitignoreに含む）
 │   ├── lora-out-phase1/                   # Phase 1チェックポイント
-│   │   └── checkpoint-final/
+│   │   └── checkpoint-*/
 │   └── lora-out-phase2/                   # Phase 2チェックポイント（最終）
-│       └── checkpoint-final/
+│       ├── checkpoint-*/
+│       └── merged/                        # （作られる場合のみ）マージ済みフルモデル
 │
 ├── mlruns/                             # MLflow追跡（.gitignoreに含む）
 │
@@ -229,22 +230,25 @@ tmux send-keys -t training "cd /path/to/Qwen-finetune && uv run bash train_all.s
 
 1. **Phase 1 訓練**（約30-60分）
    - 負例（非犯罪記事）データで事前学習
-   - チェックポイント: `./outputs/lora-out-phase1/checkpoint-final/`
+   - チェックポイント: `./outputs/lora-out-phase1/checkpoint-*/`
 
 2. **Phase 2 訓練**（約1-2時間）
-   - Phase 1 チェックポイントから再開
+   - Phase 1 の LoRA を初期値としてロード（推奨: `lora_model_dir`）
    - 正例（犯罪記事）で学習 + 負例を 20% の比率でリプレイ
-   - チェックポイント: `./outputs/lora-out-phase2/checkpoint-final/`
+   - チェックポイント: `./outputs/lora-out-phase2/checkpoint-*/`
 
 3. **モデルマージ**
-   - LoRA アダプター + ベースモデル → スタンドアロン版を生成
-   - 出力: `./outputs/lora-out-phase2/merged/`（~14-15GB）
+   - LoRA アダプター + ベースモデル → スタンドアロン版（フルモデル）を生成
+   - **注**: 設定/環境により `merged/` が作られないことがあります（その場合は LoRA アダプターのみが保存されます）
+   - 出力（作られる場合）: `./outputs/lora-out-phase2/merged/`（~14-15GB）
 
 4. **Model Card 生成**
    - README.md に使用方法を記載
 
 5. **HF Hub アップロード**
-   - マージ版を自動的に Hugging Face Hub へアップロード
+   - `upload_merged_model.py` が以下のいずれかをアップロードします
+     - `merged/` が存在する場合: **マージ済みフルモデル**
+     - `merged/` が無い場合: **LoRA アダプター（`outputs/lora-out-phase2/` 直下）**
    - URL: `https://huggingface.co/teru00801/rakuten-7b-instruct-person`
 
 **全体の所要時間**: 約2-3時間（A100 80GB）
