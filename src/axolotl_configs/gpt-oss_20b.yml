@@ -9,7 +9,7 @@ plugins:
 
 experimental_skip_move_to_device: true  # prevent OOM by NOT putting model to GPU before sharding
 
-deepspeed: deepspeed_configs/zero2.json
+deepspeed: src/deepspeed_configs/zero2.json
 
 hub_model_id: teru00801/gpt-oss-20b-person-v1
 hub_strategy: "end"
