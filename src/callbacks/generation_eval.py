@@ -101,7 +101,7 @@ def normalize_value(value: Any) -> str:
 
 
 def extract_offenders(output_obj: Dict[str, Any] | None) -> List[Dict[str, Any]]:
-    """Extract offenders (is_offender=True with act) from output object."""
+    """Extract offenders (is_offender=True) from output object."""
     if not isinstance(output_obj, dict):
         return []
     persons = output_obj.get("persons")
@@ -112,9 +112,7 @@ def extract_offenders(output_obj: Dict[str, Any] | None) -> List[Dict[str, Any]]
     for p in persons:
         if not isinstance(p, dict):
             continue
-        is_offender = p.get("is_offender") is True
-        act = normalize_value(p.get("act"))
-        if is_offender and act:
+        if p.get("is_offender") is True:
             offenders.append(p)
     return offenders
 
@@ -134,6 +132,13 @@ def to_csv_like_fields(output_obj: Dict[str, Any] | None) -> Dict[str, str] | No
 
     def _join_slash(values: List[str]) -> str:
         return "/".join(values) if values else ""
+
+    def _join_acts(values: List[str]) -> str:
+        if not values:
+            return ""
+        if all(v == "" for v in values):
+            return ""
+        return "/".join(values)
 
     occured_locations_list = output_obj.get("occured_locations")
     police_departments_list = output_obj.get("police_departments")
@@ -157,7 +162,7 @@ def to_csv_like_fields(output_obj: Dict[str, Any] | None) -> Dict[str, str] | No
         "person_position_name": _join_slash(positions),
         "person_belongs_company": _join_slash(belongs),
         "person_address": _join_slash(addresses),
-        "person_violated_law": _join_slash(acts),
+        "person_violated_law": _join_acts(acts),
         "occured_locations": occured_locations_csv,
         "police_departments": police_departments_csv,
     }

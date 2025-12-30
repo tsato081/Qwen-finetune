@@ -103,6 +103,11 @@ def main() -> None:
         log("\nLoading data...")
         rows = load_eval_messages(EVAL_MESSAGES)
         gold_rows = load_test_rows(EVAL_GOLD)
+        quality_test_ids = [row.get("quality_test_id", "") for row in rows]
+        input_texts = [
+            "\n".join(m.get("content", "") for m in row.get("messages", []) if m.get("role") == "user")
+            for row in rows
+        ]
 
         log(f"  Eval samples: {len(rows)}")
         log(f"  Gold samples: {len(gold_rows)}")
@@ -200,7 +205,12 @@ def main() -> None:
 
         log("\nComputing metrics...")
         gold_csv_rows = [{k: row.get(k, "") for k in CSV_FIELDS} for row in gold_rows]
-        metrics = compute_detailed_metrics(pred_rows, gold_csv_rows)
+        metrics = compute_detailed_metrics(
+            pred_rows,
+            gold_csv_rows,
+            input_texts=input_texts,
+            quality_test_ids=quality_test_ids,
+        )
         OUTPUT_METRICS.write_text(json.dumps(metrics, ensure_ascii=False, indent=2))
 
         log(f"\n{'='*80}")
@@ -214,6 +224,33 @@ def main() -> None:
             acc = metrics[f"{k}/accuracy"]
             total_non_blank = metrics[f"{k}/total_non_blank"]
             log(f"  {k}: {acc:.2%} ({total_non_blank} non-blank)")
+
+        if metrics.get("error_breakdown/enabled"):
+            log("\nPer-field error breakdown (miss/span/hallucination):")
+            examples_by_field = metrics.get("error_breakdown/examples") or {}
+            for k in CSV_FIELDS:
+                incorrect = int(metrics.get(f"{k}/incorrect", 0))
+                miss = int(metrics.get(f"{k}/miss", 0))
+                span = int(metrics.get(f"{k}/span_mismatch", 0))
+                halluc = int(metrics.get(f"{k}/hallucination", 0))
+                other = int(metrics.get(f"{k}/other_incorrect", 0))
+                if incorrect == 0:
+                    continue
+                log(f"  {k}: incorrect={incorrect} miss={miss} span={span} halluc={halluc} other={other}")
+                field_examples = examples_by_field.get(k, {})
+                for bucket in ("miss", "span_mismatch", "hallucination"):
+                    bucket_examples = field_examples.get(bucket) or []
+                    if not bucket_examples:
+                        continue
+                    ids = [e.get("quality_test_id", "") for e in bucket_examples[:3] if e.get("quality_test_id")]
+                    if ids:
+                        log(f"    {bucket} ex: {', '.join(ids)}")
+
+            age_num = metrics.get("error_breakdown/person_age_at_published_numeric_equivalent_mismatch")
+            if isinstance(age_num, int):
+                age_incorrect = int(metrics.get("person_age_at_published/incorrect", 0))
+                rate = (age_num / age_incorrect) if age_incorrect > 0 else 0.0
+                log(f"\nAge numeric-equivalent mismatches: {age_num}/{age_incorrect} ({rate:.2%})")
 
 
 if __name__ == "__main__":

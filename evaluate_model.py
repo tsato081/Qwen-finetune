@@ -13,6 +13,8 @@ Output:
 
 import csv
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -28,6 +30,19 @@ CSV_FIELDS = [
     "occured_locations",
     "police_departments",
 ]
+
+_SLASH_FIELDS = {
+    "person_name",
+    "person_age_at_published",
+    "person_address",
+    "person_belongs_company",
+    "person_position_name",
+    "person_violated_law",
+}
+_COMMA_FIELDS = {
+    "occured_locations",
+    "police_departments",
+}
 
 
 @dataclass
@@ -158,9 +173,7 @@ def extract_offenders(output_obj: Dict[str, Any] | None) -> List[Dict[str, Any]]
     for p in persons:
         if not isinstance(p, dict):
             continue
-        is_offender = p.get("is_offender") is True
-        act = normalize_value(p.get("act"))
-        if is_offender and act:
+        if p.get("is_offender") is True:
             offenders.append(p)
     return offenders
 
@@ -176,6 +189,13 @@ def to_csv_like_fields(output_obj: Dict[str, Any] | None) -> Dict[str, str]:
 
     def _join_slash(values: List[str]) -> str:
         return "/".join(values) if values else ""
+
+    def _join_acts(values: List[str]) -> str:
+        if not values:
+            return ""
+        if all(v == "" for v in values):
+            return ""
+        return "/".join(values)
 
     occured_locations_list = output_obj.get("occured_locations") if isinstance(output_obj, dict) else None
     police_departments_list = output_obj.get("police_departments") if isinstance(output_obj, dict) else None
@@ -196,7 +216,7 @@ def to_csv_like_fields(output_obj: Dict[str, Any] | None) -> Dict[str, str]:
         "person_position_name": _join_slash(positions),
         "person_belongs_company": _join_slash(belongs),
         "person_address": _join_slash(addresses),
-        "person_violated_law": _join_slash(acts),
+        "person_violated_law": _join_acts(acts),
         "occured_locations": occured_locations_csv,
         "police_departments": police_departments_csv,
     }
@@ -243,11 +263,91 @@ def build_prompt(tokenizer: Any, messages: List[Dict[str, str]]) -> str:
 
 
 def compute_detailed_metrics(
-    pred_rows: Sequence[Dict[str, str]], gold_rows: Sequence[Dict[str, str]]
+    pred_rows: Sequence[Dict[str, str]],
+    gold_rows: Sequence[Dict[str, str]],
+    input_texts: Sequence[str] | None = None,
+    quality_test_ids: Sequence[str] | None = None,
+    max_examples_per_bucket: int = 20,
 ) -> Dict[str, Any]:
+    def _normalize_for_span(text: str) -> str:
+        s = unicodedata.normalize("NFKC", text)
+        s = re.sub(r"\s+", "", s)
+        return s
+
+    def _is_blankish(text: str) -> bool:
+        t = normalize_value(text)
+        if t == "":
+            return True
+        return t.lower() in {"null", "none"}
+
+    def _is_pred_missing(field: str, pred: str) -> bool:
+        if _is_blankish(pred):
+            return True
+        p = normalize_value(pred)
+        if field in _SLASH_FIELDS and p and p.strip("/") == "":
+            return True
+        return False
+
+    def _split_pred_tokens(field: str, pred: str) -> List[str]:
+        p = normalize_value(pred)
+        if _is_blankish(p):
+            return []
+        if field in _SLASH_FIELDS:
+            return [seg.strip() for seg in p.split("/") if seg.strip()]
+        if field in _COMMA_FIELDS:
+            return [seg.strip() for seg in p.split(",") if seg.strip()]
+        return [p]
+
+    def _pred_found_in_input(field: str, pred: str, normalized_input: str) -> bool:
+        tokens = _split_pred_tokens(field, pred)
+        if not tokens:
+            return False
+        return any(_normalize_for_span(t) in normalized_input for t in tokens if _normalize_for_span(t))
+
+    def _parse_int_loose(text: str) -> int | None:
+        s = _normalize_for_span(text)
+        m = re.search(r"\d+", s)
+        if not m:
+            return None
+        try:
+            return int(m.group(0))
+        except ValueError:
+            return None
+
+    def _age_numeric_equivalent(pred: str, gold: str) -> bool:
+        pred_parts = normalize_value(pred).split("/")
+        gold_parts = normalize_value(gold).split("/")
+        if len(pred_parts) != len(gold_parts):
+            return False
+        for p_part, g_part in zip(pred_parts, gold_parts):
+            p_part = p_part.strip()
+            g_part = g_part.strip()
+            if p_part == "" and g_part == "":
+                continue
+            pi = _parse_int_loose(p_part)
+            gi = _parse_int_loose(g_part)
+            if pi is None or gi is None or pi != gi:
+                return False
+        return True
+
     total = len(gold_rows)
     field_states = {k: {"correct": 0, "incorrect": 0, "blank_match": 0} for k in CSV_FIELDS}
     all_match = 0
+
+    use_span_analysis = (
+        input_texts is not None
+        and quality_test_ids is not None
+        and len(input_texts) == total
+        and len(quality_test_ids) == total
+    )
+    normalized_inputs = [_normalize_for_span(t) for t in input_texts] if use_span_analysis else []
+    error_buckets: Dict[str, Dict[str, int]] = {
+        k: {"miss": 0, "span_mismatch": 0, "hallucination": 0, "other_incorrect": 0} for k in CSV_FIELDS
+    }
+    bucket_examples: Dict[str, Dict[str, List[Dict[str, str]]]] = {
+        k: {"miss": [], "span_mismatch": [], "hallucination": [], "other_incorrect": []} for k in CSV_FIELDS
+    }
+    age_numeric_equivalent = 0
 
     for pred, gold in zip(pred_rows, gold_rows):
         row_all_match = True
@@ -267,6 +367,33 @@ def compute_detailed_metrics(
         if row_all_match:
             all_match += 1
 
+    # Second pass for bucket attribution (keeps core accuracy logic unchanged above).
+    if use_span_analysis:
+        for row_idx, (pred, gold) in enumerate(zip(pred_rows, gold_rows)):
+            normalized_input = normalized_inputs[row_idx]
+            qid = quality_test_ids[row_idx]
+            for k in CSV_FIELDS:
+                p = normalize_value(pred.get(k))
+                g = normalize_value(gold.get(k))
+                if p == g:
+                    continue
+
+                if k == "person_age_at_published":
+                    if _age_numeric_equivalent(p, g):
+                        age_numeric_equivalent += 1
+
+                if g != "" and _is_pred_missing(k, p):
+                    bucket = "miss"
+                elif _is_pred_missing(k, p):
+                    bucket = "other_incorrect"
+                else:
+                    bucket = "span_mismatch" if _pred_found_in_input(k, p, normalized_input) else "hallucination"
+
+                error_buckets[k][bucket] += 1
+                examples = bucket_examples[k][bucket]
+                if len(examples) < max_examples_per_bucket:
+                    examples.append({"quality_test_id": qid, "pred": p, "gold": g})
+
     metrics: Dict[str, Any] = {
         "total_samples": total,
         "all_fields_exact_match": all_match,
@@ -283,6 +410,18 @@ def compute_detailed_metrics(
         metrics[f"{k}/blank_match"] = blank
         metrics[f"{k}/accuracy"] = correct / denominator if denominator > 0 else 0.0
         metrics[f"{k}/total_non_blank"] = denominator
+
+        if use_span_analysis:
+            metrics[f"{k}/miss"] = error_buckets[k]["miss"]
+            metrics[f"{k}/span_mismatch"] = error_buckets[k]["span_mismatch"]
+            metrics[f"{k}/hallucination"] = error_buckets[k]["hallucination"]
+            metrics[f"{k}/other_incorrect"] = error_buckets[k]["other_incorrect"]
+
+    if use_span_analysis:
+        metrics["error_breakdown/enabled"] = True
+        metrics["error_breakdown/max_examples_per_bucket"] = max_examples_per_bucket
+        metrics["error_breakdown/person_age_at_published_numeric_equivalent_mismatch"] = age_numeric_equivalent
+        metrics["error_breakdown/examples"] = bucket_examples
 
     return metrics
 
@@ -319,6 +458,11 @@ def main() -> None:
         log("\nLoading data...")
         rows = load_eval_messages(cfg.eval_messages)
         gold_rows = load_test_rows(cfg.eval_gold)
+        quality_test_ids = [row.get("quality_test_id", "") for row in rows]
+        input_texts = [
+            "\n".join(m.get("content", "") for m in row.get("messages", []) if m.get("role") == "user")
+            for row in rows
+        ]
 
         log(f"  Eval samples: {len(rows)}")
         log(f"  Gold samples: {len(gold_rows)}")
@@ -407,7 +551,12 @@ def main() -> None:
 
         log("\nComputing metrics...")
         gold_csv_rows = [{k: row.get(k, "") for k in CSV_FIELDS} for row in gold_rows]
-        metrics = compute_detailed_metrics(pred_rows, gold_csv_rows)
+        metrics = compute_detailed_metrics(
+            pred_rows,
+            gold_csv_rows,
+            input_texts=input_texts,
+            quality_test_ids=quality_test_ids,
+        )
         cfg.output_metrics.write_text(json.dumps(metrics, ensure_ascii=False, indent=2))
 
         log(f"\n{'='*80}")
@@ -421,6 +570,33 @@ def main() -> None:
             acc = metrics[f"{k}/accuracy"]
             total_non_blank = metrics[f"{k}/total_non_blank"]
             log(f"  {k}: {acc:.2%} ({total_non_blank} non-blank)")
+
+        if metrics.get("error_breakdown/enabled"):
+            log("\nPer-field error breakdown (miss/span/hallucination):")
+            examples_by_field = metrics.get("error_breakdown/examples") or {}
+            for k in CSV_FIELDS:
+                incorrect = int(metrics.get(f"{k}/incorrect", 0))
+                miss = int(metrics.get(f"{k}/miss", 0))
+                span = int(metrics.get(f"{k}/span_mismatch", 0))
+                halluc = int(metrics.get(f"{k}/hallucination", 0))
+                other = int(metrics.get(f"{k}/other_incorrect", 0))
+                if incorrect == 0:
+                    continue
+                log(f"  {k}: incorrect={incorrect} miss={miss} span={span} halluc={halluc} other={other}")
+                field_examples = examples_by_field.get(k, {})
+                for bucket in ("miss", "span_mismatch", "hallucination"):
+                    bucket_examples = field_examples.get(bucket) or []
+                    if not bucket_examples:
+                        continue
+                    ids = [e.get("quality_test_id", "") for e in bucket_examples[:3] if e.get("quality_test_id")]
+                    if ids:
+                        log(f"    {bucket} ex: {', '.join(ids)}")
+
+            age_num = metrics.get("error_breakdown/person_age_at_published_numeric_equivalent_mismatch")
+            if isinstance(age_num, int):
+                age_incorrect = int(metrics.get("person_age_at_published/incorrect", 0))
+                rate = (age_num / age_incorrect) if age_incorrect > 0 else 0.0
+                log(f"\nAge numeric-equivalent mismatches: {age_num}/{age_incorrect} ({rate:.2%})")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 base_model: openai/gpt-oss-20b
 use_kernels: false
+
 model_quantization_config: Mxfp4Config
 model_quantization_config_kwargs:
   dequantize: true
@@ -7,15 +8,15 @@ model_quantization_config_kwargs:
 plugins:
   - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
 
-experimental_skip_move_to_device: true  # prevent OOM by NOT putting model to GPU before sharding
-
+experimental_skip_move_to_device: true
 deepspeed: src/deepspeed_configs/zero2.json
 
 hub_model_id: teru00801/gpt-oss-20b-person-v1
 hub_strategy: "end"
 hf_use_auth_token: true
 
-dataset_prepared_path: ./outputs/last_run_prepared
+# eot_tokens / tokenizer周りを変えたらここは作り直し推奨（別パスにするのが安全）
+dataset_prepared_path: ./outputs/prepared_gpt-oss_person
 
 datasets:
   - path: data/train/hawks_train_messages.jsonl
@@ -23,7 +24,7 @@ datasets:
     train_on_inputs: false
   - path: data/train/person_dummy_messages.jsonl
     type: chat_template
-    weight: 0.2
+    weight: 0.05
 
 test_datasets:
   - path: data/train/hawks_val_messages.jsonl
@@ -44,38 +45,34 @@ hf_mlflow_log_artifacts: false
 gradient_accumulation_steps: 2
 micro_batch_size: 8
 num_epochs: 1
+
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
-learning_rate: 0.0002
+learning_rate: 0.0001
+warmup_ratio: 0.03
+weight_decay: 0.01
+max_grad_norm: 1.0
+
 evals_per_epoch: 4
 
 adapter: lora
-lora_r: 64
-lora_alpha: 128
-lora_dropout: 0.0
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.01
 lora_target_modules:
   - q_proj
   - k_proj
   - v_proj
   - o_proj
-  - gate_proj
-  - up_proj
-  - down_proj
 
-special_tokens:
+# ここが重要：EOTは special_tokens ではなくトップレベル
 eot_tokens:
   - "<|end|>"
-
-warmup_ratio: 0.03
 
 gradient_checkpointing: true
 
 dataloader_num_workers: 8
 dataloader_prefetch_factor: 4
 dataloader_pin_memory: true
-
-lora_mlp_kernel: true
-lora_qkv_kernel: true
-lora_o_kernel: true
 
 flash_attention: true
