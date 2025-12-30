@@ -4,12 +4,15 @@ Evaluate model on Hawks eval dataset (messages JSONL + gold CSV).
 
 Input: data/test/hawks_eval_messages.jsonl
 Gold:  data/test/hawks_eval_gold.csv
-Output: outputs/eval_predictions.csv, outputs/eval_metrics.json
+Output:
+  - outputs/eval_predictions.csv
+  - outputs/eval_metrics.json
+  - outputs/eval_generations.jsonl
+  - outputs/eval_inference.log
 """
 
 import csv
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -36,11 +39,10 @@ class EvalConfig:
     output_csv: Path = Path("outputs/eval_predictions.csv")
     output_metrics: Path = Path("outputs/eval_metrics.json")
     debug_generations_jsonl: Path = Path("outputs/eval_generations.jsonl")
-    debug_samples: int = 0
+    output_log: Path = Path("outputs/eval_inference.log")
     max_seq_length: int = 4096
-    max_new_tokens: int = 1024
-    batch_size: int = 1
-    max_samples: Optional[int] = None
+    max_new_tokens: int = 2048
+    batch_size: int = 8
     load_in_4bit: bool = False
     torch_dtype: str = "bf16"
     device_map: str = "auto"
@@ -52,13 +54,10 @@ def is_adapter_dir(path: Path) -> bool:
 
 def resolve_model_dir(requested: Path) -> Path:
     if requested.exists():
+        merged = requested / "merged"
+        if merged.exists():
+            return merged
         return requested
-
-    env = os.getenv("EVAL_MODEL_DIR") or os.getenv("MODEL_DIR")
-    if env:
-        env_path = Path(env)
-        if env_path.exists():
-            return env_path
 
     out_dir = Path("outputs/gpt-oss-out")
     merged = out_dir / "merged"
@@ -72,34 +71,6 @@ def resolve_model_dir(requested: Path) -> Path:
         return ckpts[-1]
 
     return requested
-
-
-def parse_args_into_config() -> EvalConfig:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Evaluate model on Hawks eval dataset (messages JSONL).")
-    parser.add_argument("--model-dir", default=None, help="Path to merged model or LoRA adapter dir.")
-    parser.add_argument("--base-model", default=None, help="Base model (required for LoRA adapters).")
-    parser.add_argument("--max-samples", type=int, default=None, help="Limit number of eval samples.")
-    parser.add_argument("--batch-size", type=int, default=None, help="Inference batch size.")
-    parser.add_argument("--debug-samples", type=int, default=None, help="Write raw generations for N samples.")
-    parser.add_argument("--debug-out", default=None, help="Debug generations JSONL path.")
-    args = parser.parse_args()
-
-    cfg = EvalConfig()
-    if args.model_dir:
-        cfg.model_dir = Path(args.model_dir)
-    if args.base_model is not None:
-        cfg.base_model = args.base_model
-    if args.max_samples is not None:
-        cfg.max_samples = args.max_samples
-    if args.batch_size is not None:
-        cfg.batch_size = args.batch_size
-    if args.debug_samples is not None:
-        cfg.debug_samples = args.debug_samples
-    if args.debug_out is not None:
-        cfg.debug_generations_jsonl = Path(args.debug_out)
-    return cfg
 
 
 def resolve_base_model(adapter_dir: Path, override: Optional[str]) -> Optional[str]:
@@ -317,91 +288,100 @@ def compute_detailed_metrics(
 
 
 def main() -> None:
-    cfg = parse_args_into_config()
+    cfg = EvalConfig()
     cfg.model_dir = resolve_model_dir(cfg.model_dir)
 
     if not cfg.model_dir.exists():
         raise FileNotFoundError(
             f"Model dir not found: {cfg.model_dir}\n"
-            "Tip: set EVAL_MODEL_DIR=/path/to/model_or_adapter or pass --model-dir."
+            "Tip: ensure outputs/gpt-oss-out exists or set EvalConfig.model_dir."
         )
     if not cfg.eval_messages.exists():
         raise FileNotFoundError(f"Eval messages not found: {cfg.eval_messages}")
     if not cfg.eval_gold.exists():
         raise FileNotFoundError(f"Gold labels not found: {cfg.eval_gold}")
 
-    print(f"\n{'='*80}")
-    print("Model Evaluation (messages)")
-    print(f"{'='*80}")
-    print(f"Model dir: {cfg.model_dir}")
-    print(f"Eval messages: {cfg.eval_messages}")
-    print(f"Gold labels: {cfg.eval_gold}")
+    cfg.output_log.parent.mkdir(parents=True, exist_ok=True)
+    with cfg.output_log.open("w", encoding="utf-8") as log_file:
 
-    print("\nLoading data...")
-    rows = load_eval_messages(cfg.eval_messages)
-    gold_rows = load_test_rows(cfg.eval_gold)
+        def log(msg: str) -> None:
+            print(msg)
+            log_file.write(msg + "\n")
+            log_file.flush()
 
-    if cfg.max_samples:
-        rows = rows[: cfg.max_samples]
-        gold_rows = gold_rows[: cfg.max_samples]
+        log(f"\n{'='*80}")
+        log("Model Evaluation (messages)")
+        log(f"{'='*80}")
+        log(f"Model dir: {cfg.model_dir}")
+        log(f"Eval messages: {cfg.eval_messages}")
+        log(f"Gold labels: {cfg.eval_gold}")
 
-    print(f"  Eval samples: {len(rows)}")
-    print(f"  Gold samples: {len(gold_rows)}")
-    if len(rows) != len(gold_rows):
-        raise ValueError(f"Sample count mismatch: {len(rows)} vs {len(gold_rows)}")
+        log("\nLoading data...")
+        rows = load_eval_messages(cfg.eval_messages)
+        gold_rows = load_test_rows(cfg.eval_gold)
 
-    print("\nLoading model...")
-    model, tokenizer = load_model_and_tokenizer(cfg)
-    model.eval()
+        log(f"  Eval samples: {len(rows)}")
+        log(f"  Gold samples: {len(gold_rows)}")
+        if len(rows) != len(gold_rows):
+            raise ValueError(f"Sample count mismatch: {len(rows)} vs {len(gold_rows)}")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.truncation_side = "left"
+        log("\nLoading model...")
+        model, tokenizer = load_model_and_tokenizer(cfg)
+        model.eval()
 
-    print("\nBuilding prompts...")
-    prompts: List[str] = []
-    for row in rows:
-        prompts.append(build_prompt(tokenizer, row["messages"]))
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.truncation_side = "left"
 
-    print(f"\nRunning inference ({len(prompts)} samples, batch_size={cfg.batch_size})...")
-    pred_rows: List[Dict[str, str]] = []
-    debug_rows: List[Dict[str, Any]] = []
+        log("\nBuilding prompts...")
+        prompts: List[str] = []
+        for row in rows:
+            prompts.append(build_prompt(tokenizer, row["messages"]))
 
-    import torch
+        log(f"\nRunning inference ({len(prompts)} samples, batch_size={cfg.batch_size})...")
+        pred_rows: List[Dict[str, str]] = []
+        debug_rows: List[Dict[str, Any]] = []
 
-    with torch.no_grad():
-        for start in range(0, len(prompts), cfg.batch_size):
-            batch_prompts = prompts[start : start + cfg.batch_size]
-            inputs = tokenizer(
-                batch_prompts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=cfg.max_seq_length,
-            )
-            device = next(model.parameters()).device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            generated = model.generate(
-                **inputs,
-                max_new_tokens=cfg.max_new_tokens,
-                do_sample=False,
-            )
+        import torch
 
-            attention_mask = inputs.get("attention_mask")
-            for i in range(len(batch_prompts)):
-                prompt_len = (
-                    int(attention_mask[i].sum().item())
-                    if attention_mask is not None
-                    else inputs["input_ids"].shape[1]
+        with torch.no_grad():
+            for start in range(0, len(prompts), cfg.batch_size):
+                batch_prompts = prompts[start : start + cfg.batch_size]
+                inputs = tokenizer(
+                    batch_prompts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=cfg.max_seq_length,
                 )
-                gen_tokens = generated[i][prompt_len:]
-                text = tokenizer.decode(gen_tokens, skip_special_tokens=False)
-                obj = parse_json_object_from_text(text)
-                pred_rows.append(to_csv_like_fields(obj) if obj else {k: "" for k in CSV_FIELDS})
-                if cfg.debug_samples and len(debug_rows) < cfg.debug_samples:
+                device = next(model.parameters()).device
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                generated = model.generate(
+                    **inputs,
+                    max_new_tokens=cfg.max_new_tokens,
+                    do_sample=False,
+                )
+
+                attention_mask = inputs.get("attention_mask")
+                for i in range(len(batch_prompts)):
+                    prompt_len = (
+                        int(attention_mask[i].sum().item())
+                        if attention_mask is not None
+                        else inputs["input_ids"].shape[1]
+                    )
+                    gen_tokens = generated[i][prompt_len:]
+                    text = tokenizer.decode(gen_tokens, skip_special_tokens=False)
+                    obj = parse_json_object_from_text(text)
+                    pred_rows.append(to_csv_like_fields(obj) if obj else {k: "" for k in CSV_FIELDS})
+
+                    quality_test_id = rows[start + i].get("quality_test_id", "")
+                    log_file.write(f"\n=== {quality_test_id} ===\n")
+                    log_file.write(text + "\n")
+                    log_file.flush()
+
                     debug_rows.append(
                         {
-                            "quality_test_id": rows[start + i].get("quality_test_id", ""),
+                            "quality_test_id": quality_test_id,
                             "prompt": batch_prompts[i],
                             "generation_text": text,
                             "parsed_ok": bool(obj),
@@ -409,44 +389,43 @@ def main() -> None:
                         }
                     )
 
-            if (start + cfg.batch_size) % 100 == 0 or (start + cfg.batch_size) >= len(prompts):
-                progress = min(start + cfg.batch_size, len(prompts))
-                print(f"  Progress: {progress}/{len(prompts)}")
+                if (start + cfg.batch_size) % 100 == 0 or (start + cfg.batch_size) >= len(prompts):
+                    progress = min(start + cfg.batch_size, len(prompts))
+                    log(f"  Progress: {progress}/{len(prompts)}")
 
-    if debug_rows:
-        print(f"\nWriting debug generations ({len(debug_rows)} samples)...")
+        log(f"\nWriting debug generations ({len(debug_rows)} samples)...")
         cfg.debug_generations_jsonl.parent.mkdir(parents=True, exist_ok=True)
         with cfg.debug_generations_jsonl.open("w", encoding="utf-8") as f:
             for row in debug_rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"  Debug generations: {cfg.debug_generations_jsonl}")
+        log(f"  Debug generations: {cfg.debug_generations_jsonl}")
 
-    print("\nWriting predictions...")
-    cfg.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    with cfg.output_csv.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["quality_test_id", *CSV_FIELDS])
-        writer.writeheader()
-        for row, pred in zip(rows, pred_rows):
-            out_row = {"quality_test_id": row.get("quality_test_id", "")}
-            out_row.update({k: pred.get(k, "") for k in CSV_FIELDS})
-            writer.writerow(out_row)
+        log("\nWriting predictions...")
+        cfg.output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with cfg.output_csv.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["quality_test_id", *CSV_FIELDS])
+            writer.writeheader()
+            for row, pred in zip(rows, pred_rows):
+                out_row = {"quality_test_id": row.get("quality_test_id", "")}
+                out_row.update({k: pred.get(k, "") for k in CSV_FIELDS})
+                writer.writerow(out_row)
 
-    print("\nComputing metrics...")
-    gold_csv_rows = [{k: row.get(k, "") for k in CSV_FIELDS} for row in gold_rows]
-    metrics = compute_detailed_metrics(pred_rows, gold_csv_rows)
-    cfg.output_metrics.write_text(json.dumps(metrics, ensure_ascii=False, indent=2))
+        log("\nComputing metrics...")
+        gold_csv_rows = [{k: row.get(k, "") for k in CSV_FIELDS} for row in gold_rows]
+        metrics = compute_detailed_metrics(pred_rows, gold_csv_rows)
+        cfg.output_metrics.write_text(json.dumps(metrics, ensure_ascii=False, indent=2))
 
-    print(f"\n{'='*80}")
-    print("Results Summary")
-    print(f"{'='*80}")
-    print(f"Total samples: {metrics['total_samples']}")
-    print(f"All fields exact match: {metrics['all_fields_exact_match']}/{metrics['total_samples']}")
-    print(f"All fields exact match rate: {metrics['all_fields_exact_match_rate']:.2%}")
-    print("\nPer-field accuracy (blank-vs-blank excluded from denominator):")
-    for k in CSV_FIELDS:
-        acc = metrics[f"{k}/accuracy"]
-        total_non_blank = metrics[f"{k}/total_non_blank"]
-        print(f"  {k}: {acc:.2%} ({total_non_blank} non-blank)")
+        log(f"\n{'='*80}")
+        log("Results Summary")
+        log(f"{'='*80}")
+        log(f"Total samples: {metrics['total_samples']}")
+        log(f"All fields exact match: {metrics['all_fields_exact_match']}/{metrics['total_samples']}")
+        log(f"All fields exact match rate: {metrics['all_fields_exact_match_rate']:.2%}")
+        log("\nPer-field accuracy (blank-vs-blank excluded from denominator):")
+        for k in CSV_FIELDS:
+            acc = metrics[f"{k}/accuracy"]
+            total_non_blank = metrics[f"{k}/total_non_blank"]
+            log(f"  {k}: {acc:.2%} ({total_non_blank} non-blank)")
 
 
 if __name__ == "__main__":
