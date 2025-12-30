@@ -41,7 +41,7 @@ class EvalConfig:
     debug_generations_jsonl: Path = Path("outputs/eval_generations.jsonl")
     output_log: Path = Path("outputs/eval_inference.log")
     max_seq_length: int = 4096
-    max_new_tokens: int = 2048
+    max_new_tokens: int = 4096
     batch_size: int = 8
     load_in_4bit: bool = False
     torch_dtype: str = "bf16"

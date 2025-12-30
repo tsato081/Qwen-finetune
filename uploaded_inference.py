@@ -33,7 +33,7 @@ OUTPUT_METRICS = Path("outputs/eval_metrics.json")
 OUTPUT_GENERATIONS = Path("outputs/eval_generations.jsonl")
 
 MAX_SEQ_LENGTH = 4096
-MAX_NEW_TOKENS = 2048
+MAX_NEW_TOKENS = 4096
 BATCH_SIZE = 8
 TORCH_DTYPE = "bf16"
 DEVICE_MAP = "auto"
