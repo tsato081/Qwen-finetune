@@ -27,6 +27,7 @@ from evaluate_model import (
 MODEL_ID = "teru00801/gpt-oss-20b-person-v1"
 EVAL_MESSAGES = Path("data/test/hawks_eval_messages.jsonl")
 EVAL_GOLD = Path("data/test/hawks_eval_gold.csv")
+RUN_LABEL = "uploaded model"
 
 OUTPUT_CSV = Path("outputs/eval_predictions.csv")
 OUTPUT_METRICS = Path("outputs/eval_metrics.json")
@@ -93,7 +94,7 @@ def main() -> None:
             log_file.flush()
 
         log(f"\n{'='*80}")
-        log("Model Evaluation (uploaded model)")
+        log(f"Model Evaluation ({RUN_LABEL})")
         log(f"{'='*80}")
         log(f"Model id: {MODEL_ID}")
         log(f"Eval messages: {EVAL_MESSAGES}")
