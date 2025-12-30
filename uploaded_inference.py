@@ -37,7 +37,9 @@ MAX_SEQ_LENGTH = 4096
 MAX_NEW_TOKENS = 4096
 BATCH_SIZE = 8
 TORCH_DTYPE = "bf16"
-DEVICE_MAP = "auto"
+# NOTE: "auto" may place the whole model on a single GPU if it fits.
+# "balanced" tries to shard across all visible GPUs.
+DEVICE_MAP = "balanced"
 LOAD_IN_4BIT = False
 
 HF_TOKEN = (
@@ -109,6 +111,13 @@ def main() -> None:
         log("\nLoading model...")
         model, tokenizer = load_model_and_tokenizer()
         model.eval()
+        try:
+            device_map = getattr(model, "hf_device_map", None)
+            if isinstance(device_map, dict):
+                used_devices = sorted({str(v) for v in device_map.values()})
+                log(f"Devices used: {used_devices}")
+        except Exception:
+            pass
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
