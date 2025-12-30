@@ -140,3 +140,7 @@
 refer to official config reference.
 docs/axolotl_config_reference.yml
 
+
+# RULE
+Do NOT use CLI. The user hates CLI.
+Do not include it if not necessary.
