@@ -143,15 +143,10 @@ def main() -> None:
                     do_sample=False,
                 )
 
-                attention_mask = inputs.get("attention_mask")
+                input_len = inputs["input_ids"].shape[1]
                 for i in range(len(batch_prompts)):
-                    prompt_len = (
-                        int(attention_mask[i].sum().item())
-                        if attention_mask is not None
-                        else inputs["input_ids"].shape[1]
-                    )
-                    gen_tokens = generated[i][prompt_len:]
-                    text = tokenizer.decode(gen_tokens, skip_special_tokens=False)
+                    gen_tokens = generated[i][input_len:]
+                    text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
                     obj = parse_json_object_from_text(text)
                     pred_rows.append(to_csv_like_fields(obj) if obj else {k: "" for k in CSV_FIELDS})
 

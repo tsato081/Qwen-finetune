@@ -415,11 +415,10 @@ def run_generation_eval(
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
-            attention_mask = inputs.get("attention_mask")
+            input_len = inputs["input_ids"].shape[1]
             for i in range(len(batch_prompts)):
-                prompt_len = int(attention_mask[i].sum().item()) if attention_mask is not None else inputs["input_ids"].shape[1]
-                gen_tokens = generated[i][prompt_len:]
-                text = tokenizer.decode(gen_tokens, skip_special_tokens=False)
+                gen_tokens = generated[i][input_len:]
+                text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
                 pred_objs.append(parse_json_object_from_text(text))
 
     tokenizer.truncation_side = truncation_side_orig
