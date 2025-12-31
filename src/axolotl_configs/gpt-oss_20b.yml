@@ -9,7 +9,6 @@ plugins:
   - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
 
 experimental_skip_move_to_device: true
-deepspeed: src/deepspeed_configs/zero2.json
 
 hub_model_id: teru00801/gpt-oss-20b-person-v1
 hub_strategy: "end"
@@ -43,7 +42,7 @@ mlflow_run_name: null
 hf_mlflow_log_artifacts: false
 
 gradient_accumulation_steps: 2
-micro_batch_size: 8
+micro_batch_size: 4
 num_epochs: 1
 
 optimizer: adamw_torch_fused
@@ -52,6 +51,8 @@ learning_rate: 0.0001
 warmup_ratio: 0.03
 weight_decay: 0.01
 max_grad_norm: 1.0
+
+tf32: true
 
 evals_per_epoch: 4
 
