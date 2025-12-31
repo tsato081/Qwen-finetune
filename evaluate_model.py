@@ -56,11 +56,12 @@ class EvalConfig:
     debug_generations_jsonl: Path = Path("outputs/eval_generations.jsonl")
     output_log: Path = Path("outputs/eval_inference.log")
     max_seq_length: int = 4096
-    max_new_tokens: int = 4096
+    max_new_tokens: int = 512
     batch_size: int = 8
     load_in_4bit: bool = False
     torch_dtype: str = "bf16"
     device_map: str = "auto"
+    seed: int = 42
 
 
 def is_adapter_dir(path: Path) -> bool:
@@ -475,6 +476,7 @@ def main() -> None:
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"
 
         log("\nBuilding prompts...")
@@ -487,6 +489,17 @@ def main() -> None:
         debug_rows: List[Dict[str, Any]] = []
 
         import torch
+        from transformers import set_seed
+
+        set_seed(cfg.seed)
+        eos_token_ids = [tokenizer.eos_token_id]
+        end_token_id = tokenizer.convert_tokens_to_ids("<|end|>")
+        if (
+            end_token_id is not None
+            and end_token_id != tokenizer.unk_token_id
+            and end_token_id not in eos_token_ids
+        ):
+            eos_token_ids.append(end_token_id)
 
         with torch.no_grad():
             for start in range(0, len(prompts), cfg.batch_size):
@@ -503,7 +516,8 @@ def main() -> None:
                 generated = model.generate(
                     **inputs,
                     max_new_tokens=cfg.max_new_tokens,
-                    do_sample=False,
+                    do_sample=True,
+                    eos_token_id=eos_token_ids,
                 )
 
                 input_len = inputs["input_ids"].shape[1]

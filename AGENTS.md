@@ -142,5 +142,5 @@ docs/axolotl_config_reference.yml
 
 
 # RULE
-Do NOT use CLI. The user hates CLI.
+Do NOT use CLI option in it when writing a script.
 Do not include it if not necessary.

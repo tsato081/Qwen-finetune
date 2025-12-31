@@ -35,13 +35,14 @@ OUTPUT_GENERATIONS = Path("outputs/eval_generations.jsonl")
 OUTPUT_LOG = Path("outputs/eval_inference.log")
 
 MAX_SEQ_LENGTH = 4096
-MAX_NEW_TOKENS = 4096
+MAX_NEW_TOKENS = 512
 BATCH_SIZE = 8
 TORCH_DTYPE = "bf16"
 # NOTE: "auto" may place the whole model on a single GPU if it fits.
 # "balanced" tries to shard across all visible GPUs.
 DEVICE_MAP = "balanced"
 LOAD_IN_4BIT = False
+SEED = 42
 
 HF_TOKEN = (
     os.getenv("HF_AUTH_TOKEN")
@@ -127,6 +128,7 @@ def main() -> None:
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"
 
         log("\nBuilding prompts...")
@@ -139,6 +141,17 @@ def main() -> None:
         debug_rows: List[Dict[str, Any]] = []
 
         import torch
+        from transformers import set_seed
+
+        set_seed(SEED)
+        eos_token_ids = [tokenizer.eos_token_id]
+        end_token_id = tokenizer.convert_tokens_to_ids("<|end|>")
+        if (
+            end_token_id is not None
+            and end_token_id != tokenizer.unk_token_id
+            and end_token_id not in eos_token_ids
+        ):
+            eos_token_ids.append(end_token_id)
 
         with torch.no_grad():
             for start in range(0, len(prompts), BATCH_SIZE):
@@ -155,7 +168,8 @@ def main() -> None:
                 generated = model.generate(
                     **inputs,
                     max_new_tokens=MAX_NEW_TOKENS,
-                    do_sample=False,
+                    do_sample=True,
+                    eos_token_id=eos_token_ids,
                 )
 
                 input_len = inputs["input_ids"].shape[1]
